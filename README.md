@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Educational-orange.svg)](LICENSE)
 
 ## 🎯 项目概述
-
+## 项目还有部分bug没有修复
 GG-AI Modifier 是一个基于 Flutter + Kotlin 开发的 AI 驱动游戏内存修改器，类似于 GG 修改器但具有更强大的 AI 功能。项目采用现代化架构，提供直观的用户界面和智能的操作体验。
 
 ### 核心特性
