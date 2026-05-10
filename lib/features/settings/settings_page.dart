@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../../core/llm/llm_config.dart';
+import '../../core/llm/prompt_builder.dart';
 import '../../main.dart';
 
 /// LLM 配置 Provider
@@ -35,6 +36,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _selectedPreset = 'custom';
   bool _isTesting = false;
   String? _testResult;
+  AiReadDepth _selectedReadDepth = AiReadDepth.sample50;
+
+  /// 自定义预设列表（从存储加载）
+  final Map<String, LlmConfig> _customPresets = {};
 
   @override
   void initState() {
@@ -49,8 +54,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _maxTokensController = TextEditingController(
       text: config.maxTokens.toString(),
     );
-    // 加载悬浮窗自动开启设置
+
+    // 加载存储服务
     final storage = ref.read(storageServiceProvider);
+
+    // 加载自定义预设
+    _loadCustomPresets(storage);
+
+    // 恢复保存的预设名称
+    final savedPreset = storage.getSetting('llm_preset') as String?;
+    if (savedPreset != null) {
+      _selectedPreset = savedPreset;
+    } else {
+      _selectedPreset = _detectPreset(config);
+    }
+
+    // 加载悬浮窗自动开启设置
     _autoStartOverlay =
         storage.getSetting('auto_start_overlay', defaultValue: false) as bool;
     if (_autoStartOverlay) {
@@ -58,6 +77,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         _toggleOverlay(true);
       });
     }
+    // 加载 AI 读取深度设置
+    final depthIndex =
+        storage.getSetting('ai_read_depth', defaultValue: 2) as int;
+    _selectedReadDepth =
+        AiReadDepth.values[depthIndex.clamp(0, AiReadDepth.values.length - 1)];
   }
 
   @override
@@ -70,18 +94,178 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     super.dispose();
   }
 
+  /// 加载自定义预设
+  void _loadCustomPresets(dynamic storage) {
+    try {
+      final json = storage.getSetting('custom_presets') as String?;
+      if (json != null) {
+        final Map<String, dynamic> decoded = Map<String, dynamic>.from(
+          const JsonDecoder().convert(json) as Map,
+        );
+        for (final entry in decoded.entries) {
+          _customPresets[entry.key] = LlmConfig.fromJson(
+            Map<String, dynamic>.from(entry.value as Map),
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// 保存自定义预设
+  void _saveCustomPresets() {
+    final storage = ref.read(storageServiceProvider);
+    final json = _customPresets.map(
+      (key, value) => MapEntry(key, value.toJson()),
+    );
+    storage.saveSetting('custom_presets', const JsonEncoder().convert(json));
+  }
+
+  /// 根据当前配置自动匹配预设
+  String _detectPreset(LlmConfig config) {
+    // 检查内置预设
+    for (final entry in LlmConfig.presets.entries) {
+      if (entry.value.baseUrl == config.baseUrl &&
+          entry.value.model == config.model) {
+        return entry.key;
+      }
+    }
+    // 检查自定义预设
+    for (final entry in _customPresets.entries) {
+      if (entry.value.baseUrl == config.baseUrl &&
+          entry.value.model == config.model) {
+        return entry.key;
+      }
+    }
+    return 'custom';
+  }
+
+  /// 获取所有预设（内置 + 自定义）
+  Map<String, LlmConfig> get _allPresets => {
+    ...LlmConfig.presets,
+    ..._customPresets,
+  };
+
   void _applyPreset(String presetName) {
-    final preset = LlmConfig.presets[presetName];
+    if (presetName == 'custom') {
+      _showAddCustomPresetDialog();
+      return;
+    }
+    final preset = _allPresets[presetName];
     if (preset != null) {
+      // 保存当前预设的 apiKey
+      _saveCurrentPresetApiKey();
       setState(() {
         _selectedPreset = presetName;
         _baseUrlController.text = preset.baseUrl;
         _modelController.text = preset.model;
-        if (presetName != 'custom') {
-          _apiKeyController.text = preset.apiKey;
-        }
+        // 恢复该预设保存的 apiKey
+        final storage = ref.read(storageServiceProvider);
+        final savedKey =
+            storage.getSetting('preset_key_$presetName') as String?;
+        _apiKeyController.text = savedKey ?? preset.apiKey;
       });
     }
+  }
+
+  /// 保存当前预设的 apiKey
+  void _saveCurrentPresetApiKey() {
+    final apiKey = _apiKeyController.text.trim();
+    if (_selectedPreset != 'custom' && apiKey.isNotEmpty) {
+      final storage = ref.read(storageServiceProvider);
+      storage.saveSetting('preset_key_$_selectedPreset', apiKey);
+    }
+  }
+
+  /// 显示添加自定义预设对话框
+  void _showAddCustomPresetDialog() {
+    final nameController = TextEditingController();
+    final urlController = TextEditingController();
+    final keyController = TextEditingController();
+    final modelController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text('添加自定义模型'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: '显示名称',
+                  hintText: '如：我的API',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: urlController,
+                decoration: const InputDecoration(
+                  labelText: 'API Base URL',
+                  hintText: 'https://api.example.com/v1',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: keyController,
+                decoration: const InputDecoration(
+                  labelText: 'API Key',
+                  hintText: 'sk-...',
+                ),
+                obscureText: true,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: modelController,
+                decoration: const InputDecoration(
+                  labelText: '模型名称',
+                  hintText: 'gpt-4o',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              final url = urlController.text.trim();
+              final key = keyController.text.trim();
+              final model = modelController.text.trim();
+
+              if (name.isEmpty || url.isEmpty || model.isEmpty) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('请填写完整信息')));
+                return;
+              }
+
+              final keyId = 'custom_$name';
+              final config = LlmConfig(baseUrl: url, apiKey: key, model: model);
+
+              setState(() {
+                _customPresets[keyId] = config;
+                _selectedPreset = keyId;
+                _baseUrlController.text = url;
+                _apiKeyController.text = key;
+                _modelController.text = model;
+              });
+
+              _saveCustomPresets();
+              _saveCurrentPresetApiKey();
+              Navigator.pop(context);
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _saveConfig() {
@@ -95,13 +279,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     ref.read(llmConfigProvider.notifier).state = config;
 
-    // 持久化保存
+    // 持久化保存到 Hive
     final storage = ref.read(storageServiceProvider);
     storage.saveLlmConfig(config);
+    // 保存当前预设名称
+    storage.saveSetting('llm_preset', _selectedPreset);
+
+    // 同时保存到 SharedPreferences（供悬浮窗读取）
+    _saveConfigToSharedPreferences(config);
 
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('✅ 配置已保存')));
+  }
+
+  /// 保存 LLM 配置到 SharedPreferences（供悬浮窗 Kotlin 代码读取）
+  Future<void> _saveConfigToSharedPreferences(LlmConfig config) async {
+    try {
+      const channel = MethodChannel('com.yl.aigg/bridge');
+      await channel.invokeMethod('saveLlmConfig', {
+        'baseUrl': config.baseUrl,
+        'apiKey': config.apiKey,
+        'model': config.model,
+        'temperature': config.temperature,
+        'maxTokens': config.maxTokens,
+      });
+    } catch (e) {
+      // 忽略错误
+    }
   }
 
   Future<void> _testConnection() async {
@@ -329,6 +534,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ],
           const SizedBox(height: 24),
 
+          // AI 读取深度
+          _buildSectionTitle('📊 AI 读取深度 (Token 优化)'),
+          const SizedBox(height: 12),
+          _buildReadDepthCard(),
+          const SizedBox(height: 24),
+
           // 悬浮窗
           _buildSectionTitle('🎮 悬浮窗'),
           const SizedBox(height: 12),
@@ -347,7 +558,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _buildInfoCard(
             icon: Icons.info_outline,
             title: 'GG-AI Modifier',
-            subtitle: '版本 1.0.0 | AI 驱动的游戏内存修改器',
+            subtitle: '版本 2.0.0 | AI 驱动的游戏内存修改器',
+          ),
+          const SizedBox(height: 12),
+          // GitHub 开源地址
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.code, color: Color(0xFF6C63FF)),
+              title: const Text('GitHub 开源地址'),
+              subtitle: const Text(
+                'https://github.com/yl985211/gg-ai-modifier',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6C63FF)),
+              ),
+              trailing: const Icon(Icons.open_in_new, color: Colors.grey),
+              onTap: () async {
+                const url = 'https://github.com/yl985211/gg-ai-modifier';
+                try {
+                  const channel = MethodChannel('com.yl.aigg/bridge');
+                  await channel.invokeMethod('openUrl', {'url': url});
+                } catch (_) {}
+              },
+            ),
           ),
           const SizedBox(height: 12),
           Container(
@@ -416,11 +647,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   selectedColor: const Color(0xFF6C63FF),
                 );
               }),
-              ChoiceChip(
-                label: const Text('自定义'),
-                selected: _selectedPreset == 'custom',
-                onSelected: (_) => _applyPreset('custom'),
-                selectedColor: const Color(0xFF6C63FF),
+              ..._customPresets.entries.map((entry) {
+                final isSelected = _selectedPreset == entry.key;
+                final displayName = entry.key.replaceFirst('custom_', '');
+                return ChoiceChip(
+                  label: Text(displayName),
+                  selected: isSelected,
+                  onSelected: (_) => _applyPreset(entry.key),
+                  selectedColor: const Color(0xFF03DAC6),
+                );
+              }),
+              ActionChip(
+                label: const Text('+ 添加自定义'),
+                onPressed: () => _showAddCustomPresetDialog(),
+                backgroundColor: const Color(0xFF3A3A3A),
+                labelStyle: const TextStyle(color: Colors.grey),
               ),
             ],
           ),
@@ -595,6 +836,60 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   activeColor: const Color(0xFF6C63FF),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadDepthCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.data_usage, color: Color(0xFF6C63FF)),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'AI 读取深度',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '限制发送给 AI 的搜索结果数量，节省 Token 并防止上下文溢出。'
+              '当结果过多时，仅发送前 N 条样本和统计数据。',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: AiReadDepth.values.map((depth) {
+                final isSelected = _selectedReadDepth == depth;
+                return ChoiceChip(
+                  label: Text(depth.label),
+                  selected: isSelected,
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedReadDepth = depth;
+                    });
+                    final storage = ref.read(storageServiceProvider);
+                    storage.saveSetting('ai_read_depth', depth.index);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('✅ AI 读取深度已设为: ${depth.label}')),
+                    );
+                  },
+                  selectedColor: const Color(0xFF6C63FF),
+                );
+              }).toList(),
             ),
           ],
         ),

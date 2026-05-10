@@ -8,11 +8,21 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 存储权限 (导出对话记录) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <!-- Android 13+ 细粒度媒体权限 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <!-- 读取应用列表 (进程选择器) -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
 
     <application
         android:label="GG-AI Modifier"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:largeHeap="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

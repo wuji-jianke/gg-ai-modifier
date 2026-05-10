@@ -7,7 +7,7 @@ import '../../core/models/memory_result.dart';
 import '../process/process_selector.dart';
 
 /// 搜索类型
-enum SearchType { exact, fuzzy, range, unknown }
+enum SearchType { exact, fuzzy, range, aob }
 
 /// 当前搜索类型 Provider
 final searchTypeProvider = StateProvider<SearchType>((ref) => SearchType.exact);
@@ -53,93 +53,103 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
     try {
       const channel = MethodChannel('com.yl.aigg/bridge');
-      
+
       // 清空之前的结果
       ref.read(searchResultsProvider.notifier).state = [];
 
-      if (searchType == SearchType.range) {
-        final min = int.tryParse(_minController.text);
-        final max = int.tryParse(_maxController.text);
-        if (min == null || max == null) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('请输入有效的范围值')));
-          return;
-        }
+      // 显示搜索中提示
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🔍 搜索中...'),
+          duration: Duration(seconds: 1),
+        ),
+      );
 
-        // 显示搜索中提示
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('🔍 搜索中...'), duration: Duration(seconds: 1)),
-        );
+      List<dynamic>? rawResults;
 
-        final rawResults = await channel.invokeMethod('searchByRange', {
-          'minValue': min,
-          'maxValue': max,
-          'type': dataType.name,
-        });
+      switch (searchType) {
+        case SearchType.range:
+          final min = int.tryParse(_minController.text);
+          final max = int.tryParse(_maxController.text);
+          if (min == null || max == null) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入有效的范围值')));
+            return;
+          }
+          rawResults =
+              await channel.invokeMethod('searchByRange', {
+                    'minValue': min,
+                    'maxValue': max,
+                    'type': dataType.name,
+                  })
+                  as List<dynamic>?;
 
-        if (rawResults != null) {
-          final results = (rawResults as List).map((item) {
-            return MemoryResult.fromJson(
-              Map<String, dynamic>.from(item as Map),
-            );
-          }).toList();
-          
-          ref.read(searchResultsProvider.notifier).state = results;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('✅ 找到 ${results.length} 个结果')),
-          );
-        }
-      } else {
-        final value = _valueController.text.trim();
-        if (value.isEmpty) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('请输入搜索值')));
-          return;
-        }
+        case SearchType.fuzzy:
+          rawResults =
+              await channel.invokeMethod('searchFuzzy', {
+                    'comparison': _selectedFuzzyComparison,
+                    'type': dataType.name,
+                  })
+                  as List<dynamic>?;
 
-        // 解析值
-        dynamic searchValue;
-        switch (dataType) {
-          case DataType.float:
-          case DataType.double:
-            searchValue = double.tryParse(value);
-            break;
-          default:
-            searchValue = int.tryParse(value);
-            break;
-        }
+        case SearchType.aob:
+          final pattern = _valueController.text.trim();
+          if (pattern.isEmpty) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入特征码')));
+            return;
+          }
+          rawResults =
+              await channel.invokeMethod('searchAob', {'pattern': pattern})
+                  as List<dynamic>?;
 
-        if (searchValue == null) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('请输入有效的数值')));
-          return;
-        }
+        case SearchType.exact:
+          final value = _valueController.text.trim();
+          if (value.isEmpty) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入搜索值')));
+            return;
+          }
 
-        // 显示搜索中提示
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('🔍 搜索中...'), duration: Duration(seconds: 1)),
-        );
+          // 解析值
+          dynamic searchValue;
+          switch (dataType) {
+            case DataType.float:
+            case DataType.double:
+              searchValue = double.tryParse(value);
+              break;
+            default:
+              searchValue = int.tryParse(value);
+              break;
+          }
 
-        final rawResults = await channel.invokeMethod('searchExact', {
-          'value': searchValue,
-          'type': dataType.name,
-        });
+          if (searchValue == null) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入有效的数值')));
+            return;
+          }
 
-        if (rawResults != null) {
-          final results = (rawResults as List).map((item) {
-            return MemoryResult.fromJson(
-              Map<String, dynamic>.from(item as Map),
-            );
-          }).toList();
-          
-          ref.read(searchResultsProvider.notifier).state = results;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('✅ 找到 ${results.length} 个结果')),
-          );
-        }
+          rawResults =
+              await channel.invokeMethod('searchExact', {
+                    'value': searchValue,
+                    'type': dataType.name,
+                  })
+                  as List<dynamic>?;
+      }
+
+      if (rawResults != null) {
+        final results = rawResults.map((item) {
+          return MemoryResult.fromJson(Map<String, dynamic>.from(item as Map));
+        }).toList();
+
+        ref.read(searchResultsProvider.notifier).state = results;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('✅ 找到 ${results.length} 个结果')));
       }
     } catch (e) {
       ScaffoldMessenger.of(
@@ -308,7 +318,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             SearchType.exact: '精确',
             SearchType.fuzzy: '模糊',
             SearchType.range: '范围',
-            SearchType.unknown: '未知',
+            SearchType.aob: '特征码',
           };
           return Expanded(
             child: Padding(
@@ -364,11 +374,55 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 ),
               ],
             ),
+          ] else if (searchType == SearchType.fuzzy) ...[
+            // 模糊搜索不需要输入值，显示对比操作选择
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '选择对比操作（首次搜索会保存快照）',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildFuzzyChip('changed', '已改变'),
+                      _buildFuzzyChip('unchanged', '未改变'),
+                      _buildFuzzyChip('increased', '增大了'),
+                      _buildFuzzyChip('decreased', '减小了'),
+                      _buildFuzzyChip('greater', '大于'),
+                      _buildFuzzyChip('less', '小于'),
+                      _buildFuzzyChip('equal', '等于'),
+                      _buildFuzzyChip('not_equal', '不等于'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ] else if (searchType == SearchType.aob) ...[
+            // 特征码搜索输入
+            TextField(
+              controller: _valueController,
+              decoration: const InputDecoration(
+                hintText: '输入特征码 (如: 48 89 5C 24 ? 48 89)',
+                prefixIcon: Icon(Icons.fingerprint, size: 16),
+              ),
+              keyboardType: TextInputType.text,
+            ),
           ] else ...[
+            // 精确搜索
             TextField(
               controller: _valueController,
               decoration: InputDecoration(
-                hintText: searchType == SearchType.unknown ? '未知值搜索' : '输入数值',
+                hintText: '输入数值',
                 prefixIcon: const Icon(Icons.numbers, size: 16),
                 suffixIcon: DropdownButton<DataType>(
                   value: dataType,
@@ -394,11 +448,26 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 ),
               ),
               keyboardType: TextInputType.number,
-              enabled: searchType != SearchType.unknown,
             ),
           ],
         ],
       ),
+    );
+  }
+
+  /// 模糊搜索对比操作 Chip
+  String _selectedFuzzyComparison = 'changed';
+  Widget _buildFuzzyChip(String value, String label) {
+    final isSelected = _selectedFuzzyComparison == value;
+    return ChoiceChip(
+      label: Text(label, style: TextStyle(fontSize: 12)),
+      selected: isSelected,
+      onSelected: (_) {
+        setState(() {
+          _selectedFuzzyComparison = value;
+        });
+      },
+      selectedColor: const Color(0xFF6C63FF),
     );
   }
 

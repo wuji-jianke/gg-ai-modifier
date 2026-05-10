@@ -171,6 +171,67 @@ class NativeBridge {
     }
   }
 
+  /// 模糊搜索（未知值搜索）
+  /// comparison: changed, unchanged, increased, decreased, greater, less, equal, not_equal
+  Future<List<MemoryResult>> searchFuzzy(
+    String comparison,
+    DataType type,
+  ) async {
+    try {
+      final result = await _channel.invokeMethod('searchFuzzy', {
+        'comparison': comparison,
+        'type': type.name,
+      });
+      if (result == null) return [];
+
+      final List<dynamic> list = result as List<dynamic>;
+      return list.map((item) {
+        final map = Map<String, dynamic>.from(item as Map);
+        return MemoryResult.fromJson(map);
+      }).toList();
+    } catch (e) {
+      print('模糊搜索失败: $e');
+      return [];
+    }
+  }
+
+  /// 特征码搜索 (AOB Scan)
+  Future<List<MemoryResult>> searchAob(String pattern, {String? mask}) async {
+    try {
+      final result = await _channel.invokeMethod('searchAob', {
+        'pattern': pattern,
+        'mask': mask,
+      });
+      if (result == null) return [];
+
+      final List<dynamic> list = result as List<dynamic>;
+      return list.map((item) {
+        final map = Map<String, dynamic>.from(item as Map);
+        return MemoryResult.fromJson(map);
+      }).toList();
+    } catch (e) {
+      print('特征码搜索失败: $e');
+      return [];
+    }
+  }
+
+  /// 特征码重定位（重启后使用）
+  Future<List<MemoryResult>> relocateAob() async {
+    try {
+      final result = await _channel.invokeMethod('relocateAob');
+      if (result == null) return [];
+
+      final List<dynamic> list = result as List<dynamic>;
+      return list.map((item) {
+        final map = Map<String, dynamic>.from(item as Map);
+        return MemoryResult.fromJson(map);
+      }).toList();
+    } catch (e) {
+      print('特征码重定位失败: $e');
+      return [];
+    }
+  }
+
   // ==================== 内存读写 ====================
 
   /// 读取内存值

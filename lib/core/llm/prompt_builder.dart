@@ -4,8 +4,32 @@
 
 import '../models/chat_message.dart';
 
+/// AI 读取深度选项
+enum AiReadDepth {
+  sample20(20, '前 20 条'),
+  sample30(30, '前 30 条'),
+  sample50(50, '前 50 条'),
+  sample100(100, '前 100 条'),
+  full(-1, '全部结果');
+
+  final int value;
+  final String label;
+  const AiReadDepth(this.value, this.label);
+}
+
 /// Prompt 构建器
 class PromptBuilder {
+  /// 当前 AI 读取深度
+  AiReadDepth _readDepth = AiReadDepth.sample50;
+
+  /// 设置 AI 读取深度
+  void setReadDepth(AiReadDepth depth) {
+    _readDepth = depth;
+  }
+
+  /// 获取当前读取深度
+  AiReadDepth get readDepth => _readDepth;
+
   /// 系统提示词
   static const String systemPrompt = '''
 你是一个游戏内存修改助手，名为 GG-AI。你的能力：
@@ -19,6 +43,11 @@ class PromptBuilder {
 - 用户说"我想改金币为99999"
 - 你引导用户: 先搜索当前金币值 → 消费金币 → 再搜索新值 → 缩小范围 → 确认地址 → 写入新值
 - 每一步返回结构化指令，由 App 执行
+
+当搜索结果过多时，App 会只发送前 N 条样本和统计数据。你需要：
+- 根据样本特征引导用户进行"数值变化"过滤
+- 建议用户在游戏中改变数值后再次搜索以缩小范围
+- 不要盲目修改，而是引导精确定位
 
 安全规则:
 - 不提供绕过在线验证的方法

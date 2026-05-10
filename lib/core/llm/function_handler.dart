@@ -36,6 +36,56 @@ class FunctionHandler {
       {
         'type': 'function',
         'function': {
+          'name': 'search_fuzzy',
+          'description': '模糊搜索（未知值搜索）。用于搜索加密数值或变动血条。首次搜索会保存快照，后续搜索对比变化。',
+          'parameters': {
+            'type': 'object',
+            'properties': {
+              'comparison': {
+                'type': 'string',
+                'enum': [
+                  'changed',
+                  'unchanged',
+                  'increased',
+                  'decreased',
+                  'greater',
+                  'less',
+                  'equal',
+                  'not_equal',
+                ],
+                'description':
+                    '对比操作：changed=已改变, unchanged=未改变, increased=增大了, decreased=减小了',
+              },
+              'data_type': {
+                'type': 'string',
+                'enum': ['dword', 'qword', 'float', 'double', 'byte', 'word'],
+                'description': '数据类型',
+              },
+            },
+            'required': ['comparison', 'data_type'],
+          },
+        },
+      },
+      {
+        'type': 'function',
+        'function': {
+          'name': 'search_aob',
+          'description': '特征码搜索 (AOB Scan)。用于搜索特定字节模式，支持重启后重定位。',
+          'parameters': {
+            'type': 'object',
+            'properties': {
+              'pattern': {
+                'type': 'string',
+                'description': '特征码模式 (如: "48 89 5C 24 ? 48 89 74 24")',
+              },
+            },
+            'required': ['pattern'],
+          },
+        },
+      },
+      {
+        'type': 'function',
+        'function': {
           'name': 'write_memory',
           'description': '向指定内存地址写入数值。用于修改游戏数据。',
           'parameters': {
@@ -120,6 +170,10 @@ class FunctionHandler {
     switch (functionName) {
       case 'search_memory':
         return _searchMemory(arguments);
+      case 'search_fuzzy':
+        return _searchFuzzy(arguments);
+      case 'search_aob':
+        return _searchAob(arguments);
       case 'write_memory':
         return _writeMemory(arguments);
       case 'freeze_memory':
@@ -148,6 +202,36 @@ class FunctionHandler {
       'count': results.length,
       'results': results.take(100).map((r) => r.toJson()).toList(),
       'message': results.isEmpty ? '未找到匹配的内存地址' : '找到 ${results.length} 个匹配地址',
+    };
+  }
+
+  /// 模糊搜索
+  Future<Map<String, dynamic>> _searchFuzzy(Map<String, dynamic> args) async {
+    final comparison = args['comparison'] as String;
+    final dataTypeStr = args['data_type'] as String;
+    final type = DataType.fromString(dataTypeStr);
+
+    final results = await _bridge.searchFuzzy(comparison, type);
+
+    return {
+      'success': true,
+      'count': results.length,
+      'results': results.take(100).map((r) => r.toJson()).toList(),
+      'message': results.isEmpty ? '未找到匹配的内存地址' : '找到 ${results.length} 个匹配地址',
+    };
+  }
+
+  /// 特征码搜索
+  Future<Map<String, dynamic>> _searchAob(Map<String, dynamic> args) async {
+    final pattern = args['pattern'] as String;
+
+    final results = await _bridge.searchAob(pattern);
+
+    return {
+      'success': true,
+      'count': results.length,
+      'results': results.take(100).map((r) => r.toJson()).toList(),
+      'message': results.isEmpty ? '未找到匹配的特征码' : '找到 ${results.length} 个匹配地址',
     };
   }
 

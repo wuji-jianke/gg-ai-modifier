@@ -2,7 +2,7 @@ name: ai_gg666
 description: "AI 驱动的游戏内存修改器 - GG Modifier"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: ^3.11.5
@@ -31,6 +31,10 @@ dependencies:
   # UI 组件
   flutter_svg: ^2.0.16
   shimmer: ^3.0.0
+
+  # Markdown 渲染
+  flutter_markdown: ^0.7.4+3
+  markdown: ^7.3.0
 
 dev_dependencies:
   flutter_test:
