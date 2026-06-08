@@ -48,18 +48,23 @@ class _OverlayAppState extends ConsumerState<OverlayApp> {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.dark(
-          primary: kPrimaryColor,
+        brightness: Brightness.light,
+        splashColor: kSplashColor,
+        highlightColor: kSplashColor,
+        scaffoldBackgroundColor: kBackgroundColor,
+        colorScheme: ColorScheme.light(
+          primary: kAccentColor,
           secondary: kSecondaryColor,
           surface: kSurfaceColor,
+          onSurface: kTextPrimary,
           error: kErrorColor,
         ),
-        scaffoldBackgroundColor: kBackgroundColor,
         appBarTheme: const AppBarTheme(
-          backgroundColor: kSurfaceColor,
+          backgroundColor: kBackgroundColor,
           elevation: 0,
           centerTitle: true,
+          foregroundColor: kTextPrimary,
+          surfaceTintColor: Colors.transparent,
         ),
       ),
       home: _buildPage(currentPage),

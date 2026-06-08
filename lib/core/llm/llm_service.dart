@@ -25,7 +25,9 @@ class LlmService {
     required PromptBuilder promptBuilder,
   }) : _config = config,
        _functionHandler = functionHandler,
-       _promptBuilder = promptBuilder;
+       _promptBuilder = promptBuilder {
+    promptBuilder.setModelName(config.model);
+  }
 
   /// 当前配置
   LlmConfig get config => _config;
@@ -36,6 +38,7 @@ class LlmService {
   /// 更新配置
   void updateConfig(LlmConfig newConfig) {
     _config = newConfig;
+    _promptBuilder.setModelName(newConfig.model);
   }
 
   /// 发送聊天消息 (非流式)

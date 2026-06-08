@@ -186,7 +186,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
+        backgroundColor: const Color(0xFFFFF9F0),
         title: const Text('添加自定义模型'),
         content: SingleChildScrollView(
           child: Column(
@@ -394,7 +394,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       appBar: AppBar(
         title: const Row(
           children: [
-            Icon(Icons.settings, color: Color(0xFF6C63FF)),
+            Icon(Icons.settings, color: Color(0xFF8D6E63)),
             SizedBox(width: 8),
             Text('设置'),
           ],
@@ -564,13 +564,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           // GitHub 开源地址
           Card(
             child: ListTile(
-              leading: const Icon(Icons.code, color: Color(0xFF6C63FF)),
+              leading: const Icon(Icons.code, color: Color(0xFF8D6E63)),
               title: const Text('GitHub 开源地址'),
               subtitle: const Text(
                 'https://github.com/yl985211/gg-ai-modifier',
-                style: TextStyle(fontSize: 12, color: Color(0xFF6C63FF)),
+                style: TextStyle(fontSize: 12, color: Color(0xFF8D6E63)),
               ),
-              trailing: const Icon(Icons.open_in_new, color: Colors.grey),
+              trailing: const Icon(Icons.open_in_new, color: Color(0xFFA1887F)),
               onTap: () async {
                 const url = 'https://github.com/yl985211/gg-ai-modifier';
                 try {
@@ -617,7 +617,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF2A2A2A),
+        color: const Color(0xFFFFF9F0),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -625,7 +625,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         children: [
           const Text(
             '选择 API 提供商',
-            style: TextStyle(fontSize: 13, color: Colors.grey),
+            style: TextStyle(fontSize: 13, color: Color(0xFFA1887F)),
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -644,7 +644,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   label: Text(labels[entry.key] ?? entry.key),
                   selected: isSelected,
                   onSelected: (_) => _applyPreset(entry.key),
-                  selectedColor: const Color(0xFF6C63FF),
+                  selectedColor: const Color(0xFF8D6E63),
                 );
               }),
               ..._customPresets.entries.map((entry) {
@@ -654,14 +654,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   label: Text(displayName),
                   selected: isSelected,
                   onSelected: (_) => _applyPreset(entry.key),
-                  selectedColor: const Color(0xFF03DAC6),
+                  selectedColor: const Color(0xFF6D4C41),
                 );
               }),
               ActionChip(
                 label: const Text('+ 添加自定义'),
                 onPressed: () => _showAddCustomPresetDialog(),
-                backgroundColor: const Color(0xFF3A3A3A),
-                labelStyle: const TextStyle(color: Colors.grey),
+                backgroundColor: const Color(0xFFE8DDD5),
+                labelStyle: const TextStyle(color: Color(0xFFA1887F)),
               ),
             ],
           ),
@@ -711,7 +711,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       : Icons.security,
                   color: _rootStatus.contains('✅')
                       ? Colors.green
-                      : const Color(0xFF6C63FF),
+                      : const Color(0xFF8D6E63),
                 ),
                 const SizedBox(width: 8),
                 Text(
@@ -723,7 +723,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             const SizedBox(height: 8),
             const Text(
               '需要 Root 权限才能读写其他进程内存。\n点击下方按钮会触发 Magisk 授权弹窗。',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -802,7 +802,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.bubble_chart, color: Color(0xFF6C63FF)),
+                const Icon(Icons.bubble_chart, color: Color(0xFF8D6E63)),
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
@@ -813,19 +813,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 Switch(
                   value: _overlayEnabled,
                   onChanged: _toggleOverlay,
-                  activeColor: const Color(0xFF6C63FF),
+                  activeColor: const Color(0xFF8D6E63),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             const Text(
               '开启后会在屏幕上显示一个悬浮球，点击可快速打开 AI 对话、内存搜索等功能，无需切换窗口。',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
             ),
             const SizedBox(height: 12),
             Row(
               children: [
-                const Icon(Icons.autorenew, size: 16, color: Colors.grey),
+                const Icon(Icons.autorenew, size: 16, color: Color(0xFFA1887F)),
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text('启动时自动开启悬浮窗', style: TextStyle(fontSize: 13)),
@@ -833,7 +833,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 Switch(
                   value: _autoStartOverlay,
                   onChanged: _toggleAutoStart,
-                  activeColor: const Color(0xFF6C63FF),
+                  activeColor: const Color(0xFF8D6E63),
                 ),
               ],
             ),
@@ -852,7 +852,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           children: [
             const Row(
               children: [
-                Icon(Icons.data_usage, color: Color(0xFF6C63FF)),
+                Icon(Icons.data_usage, color: Color(0xFF8D6E63)),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -866,7 +866,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             const Text(
               '限制发送给 AI 的搜索结果数量，节省 Token 并防止上下文溢出。'
               '当结果过多时，仅发送前 N 条样本和统计数据。',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -887,7 +887,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       SnackBar(content: Text('✅ AI 读取深度已设为: ${depth.label}')),
                     );
                   },
-                  selectedColor: const Color(0xFF6C63FF),
+                  selectedColor: const Color(0xFF8D6E63),
                 );
               }).toList(),
             ),
@@ -905,7 +905,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }) {
     return Card(
       child: ListTile(
-        leading: Icon(icon, color: const Color(0xFF6C63FF)),
+        leading: Icon(icon, color: const Color(0xFF8D6E63)),
         title: Text(title),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
         trailing: trailing,

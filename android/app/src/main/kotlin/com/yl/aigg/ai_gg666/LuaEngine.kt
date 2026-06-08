@@ -288,7 +288,7 @@ object LuaEngine {
         gg.set("refineNumber", object : OneArgFunction() {
             override fun call(arg: LuaValue): LuaValue {
                 val value = arg.tojstring()
-                val prevAddresses = searchResults.map { it["addressInt"] as Int }
+                val prevAddresses = searchResults.map { (it["addressInt"] as Number).toLong() }
                 val numValue: Any = value.toDoubleOrNull() ?: value.toLongOrNull() ?: 0
                 val type = searchResults.firstOrNull()?.get("type") as? String ?: "dword"
                 val results = MemoryEngine.filterResults(prevAddresses, numValue, type)

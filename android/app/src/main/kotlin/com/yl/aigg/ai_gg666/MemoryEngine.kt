@@ -1,912 +1,583 @@
 package com.yl.aigg.ai_gg666
 
-import java.io.File
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.runBlocking
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * 内存引擎 v2.0
- * - 持久化 Root Shell 会话（避免频繁 su 弹窗）
- * - 内存段智能筛选（优先 heap/anon，过滤只读段）
- * - 模糊搜索（>、<、==、!=、changed、unchanged）
- * - 特征码搜索（AOB Scan，支持重启后重定位）
- * - 分块读取（2MB chunk，避免 OOM）
- * - 数据对齐修复（Endian.little 显式声明）
+ * 内存引擎 v20.0 - Root Scanner 版
+ *
+ * - 使用独立的 root 可执行文件进行内存扫描
+ * - C++ process_vm_readv/writev 系统调用（有 CAP_SYS_PTRACE）
+ * - 2MB 高速缓冲区滑动窗口
+ * - 异步执行，不阻塞 UI 线程
  */
 object MemoryEngine {
 
+    private const val TAG = "MemoryEngine"
+    private const val MAX_RESULTS = 500
+
     private var attachedPid: Int? = null
-
-    // 上一轮快照（用于模糊搜索对比）
+    private var activeRegions: List<MemRegion> = emptyList()
     private var lastSnapshot: Map<Long, ByteArray> = emptyMap()
-
-    // 特征码数据库（地址 -> 周围字节切片）
     private val aobDatabase = mutableMapOf<Long, AobSignature>()
+    private var appContext: Context? = null
 
+    init {
+        try {
+            System.loadLibrary("aigg_scanner")
+            Log.i(TAG, "✅ Native library loaded")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.w(TAG, "Native library not loaded (using Root Scanner instead)")
+        }
+    }
+
+    fun isNativeAvailable(): Boolean = true
+    
     /**
-     * 附加到目标进程
+     * 设置 Application Context（用于初始化 RootScanner）
      */
+    fun setContext(context: Context) {
+        appContext = context
+    }
+
+    // ==================== 进程管理 ====================
+
     fun attachProcess(pid: Int): Boolean {
         return try {
-            val procDir = File("/proc/$pid")
-            if (!procDir.exists()) {
-                val result = RootManager.executeRootCommand("ls /proc/$pid/status")
-                if (result == null || result.isEmpty()) return false
+            // 检查 Root 权限
+            if (!RootManager.checkRootAccess()) {
+                Log.e(TAG, "❌ No root access")
+                return false
             }
+            
+            // 初始化 RootScanner
+            val ctx = appContext
+            if (ctx != null) {
+                runBlocking {
+                    RootScanner.initialize(ctx)
+                }
+            }
+            
+            // 解析 maps
+            activeRegions = getRegions(pid)
+            if (activeRegions.isEmpty()) {
+                Log.e(TAG, "Process $pid has no accessible regions")
+                return false
+            }
+
             attachedPid = pid
             lastSnapshot = emptyMap()
             aobDatabase.clear()
+
+            val totalMB = activeRegions.sumOf { it.endAddr - it.startAddr } / 1024 / 1024
+            Log.i(TAG, "✅ Attached to process $pid (${activeRegions.size} regions, ${totalMB}MB)")
             true
         } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to attach: ${e.message}", e)
             false
         }
     }
 
-    /**
-     * 分离当前进程
-     */
     fun detachProcess() {
         attachedPid = null
+        activeRegions = emptyList()
         lastSnapshot = emptyMap()
         aobDatabase.clear()
+        RootScanner.shutdown()
     }
 
-    /**
-     * 获取当前附加的进程 PID
-     */
     fun getAttachedPid(): Int? = attachedPid
 
-    // ==================== 内存段智能筛选 ====================
+    // ==================== 内存段解析（通过 Root Shell 一次性读取） ====================
 
-    /**
-     * 解析 /proc/pid/maps，返回按优先级排序的内存段
-     * 优先级：[heap] > [anon:*] > rw-p 匿名 > 其他 rw-p
-     * 过滤：跳过只读段 (r--)、跳过大于 50MB 的区域
-     */
+    data class MemRegion(val startAddr: Long, val endAddr: Long, val priority: Int)
+
+    private fun getRegions(pid: Int): List<MemRegion> {
+        val mapsResult = RootManager.executeRootCommand("cat /proc/$pid/maps 2>/dev/null") ?: return emptyList()
+
+        val regions = mutableListOf<MemRegion>()
+        for (line in mapsResult.lines()) {
+            if (line.isBlank()) continue
+            val parts = line.split("\\s+".toRegex())
+            if (parts.size < 2) continue
+            val addrRange = parts[0].split("-")
+            if (addrRange.size != 2) continue
+
+            val startAddr = addrRange[0].toLongOrNull(16) ?: continue
+            val endAddr = addrRange[1].toLongOrNull(16) ?: continue
+            val permissions = parts[1]
+            val name = if (parts.size > 5) parts.subList(5, parts.size).joinToString(" ") else ""
+            val regionSize = endAddr - startAddr
+
+            if (regionSize <= 0) continue
+            if (!permissions.contains('r') || !permissions.contains('w')) continue
+            if (name.contains("/dev/ashmem") || name.contains("[anon:vulkan]")) continue
+            if (regionSize > 100 * 1024 * 1024) continue
+
+            var priority = 0
+            if (permissions.contains('r')) priority += 10
+            if (permissions.contains('w')) priority += 20
+            when {
+                name.contains("[heap]") -> priority += 70
+                name.contains("[anon:") -> priority += 50
+                name.isEmpty() -> priority += 40
+            }
+
+            regions.add(MemRegion(startAddr, endAddr, priority))
+        }
+
+        return regions.sortedByDescending { it.priority }
+    }
+
     fun getMemoryRegions(): List<Map<String, Any>> {
-        val pid = attachedPid ?: return emptyList()
-
-        return try {
-            val mapsResult = RootManager.executeRootCommand("cat /proc/$pid/maps 2>/dev/null") ?: return emptyList()
-            val regions = mutableListOf<MemoryRegionInfo>()
-
-            for (line in mapsResult.lines()) {
-                if (line.isBlank()) continue
-                val parts = line.split(" ")
-                if (parts.isEmpty()) continue
-
-                val addrRange = parts[0].split("-")
-                if (addrRange.size != 2) continue
-
-                val startAddr = addrRange[0].toLongOrNull(16) ?: continue
-                val endAddr = addrRange[1].toLongOrNull(16) ?: continue
-                val permissions = if (parts.size > 1) parts[1] else "----"
-                val name = if (parts.size > 5) parts.subList(5, parts.size).joinToString(" ") else ""
-
-                val regionSize = endAddr - startAddr
-
-                // 跳过太大的区域（> 50MB）和太小的区域
-                if (regionSize > 50 * 1024 * 1024 || regionSize <= 0) continue
-
-                // 只保留可读写的段
-                if (!permissions.contains('r') || !permissions.contains('w')) continue
-
-                // 计算优先级权重
-                val priority = calculateRegionPriority(permissions, name)
-
-                regions.add(MemoryRegionInfo(
-                    startAddr = startAddr,
-                    endAddr = endAddr,
-                    permissions = permissions,
-                    name = name,
-                    priority = priority
-                ))
-            }
-
-            // 按优先级排序（高优先级在前）
-            regions.sortByDescending { it.priority }
-
-            regions.map { region ->
-                mapOf(
-                    "startAddress" to region.startAddr.toInt(),
-                    "endAddress" to region.endAddr.toInt(),
-                    "size" to (region.endAddr - region.startAddr).toInt(),
-                    "permissions" to region.permissions,
-                    "isReadable" to region.permissions.contains('r'),
-                    "isWritable" to region.permissions.contains('w'),
-                    "isExecutable" to region.permissions.contains('x'),
-                    "isAnonymous" to region.name.isEmpty(),
-                    "name" to region.name,
-                    "priority" to region.priority
-                )
-            }
-        } catch (e: Exception) {
-            emptyList()
+        return activeRegions.map { r ->
+            mapOf("startAddress" to r.startAddr, "endAddress" to r.endAddr,
+                "size" to (r.endAddr - r.startAddr), "priority" to r.priority)
         }
     }
 
-    /**
-     * 计算内存段优先级
-     * [heap] = 100, [anon:*] = 80, 匿名 rw-p = 60, 其他 rw-p = 40
-     */
-    private fun calculateRegionPriority(permissions: String, name: String): Int {
-        var priority = 0
+    // ==================== 辅助：获取地址和大小数组（已废弃，保留用于兼容） ====================
 
-        // 基础权限分
-        if (permissions.contains('r')) priority += 10
-        if (permissions.contains('w')) priority += 20
-        if (permissions.contains('x')) priority += 5  // 可执行段通常不包含游戏数据
+    // ==================== 搜索 ====================
 
-        // 名称权重
-        when {
-            name.contains("[heap]") -> priority += 70
-            name.contains("[anon:") -> priority += 50
-            name.contains("[stack]") -> priority += 30
-            name.isEmpty() -> priority += 40  // 匿名段
-            name.contains(".so") -> priority += 10  // 共享库
-            name.contains("[vdso]") -> priority -= 20  // 虚拟动态共享对象
-        }
-
-        return priority
-    }
-
-    /**
-     * 获取高优先级的内存段（用于快速扫描）
-     */
-    private fun getHighPriorityRegions(): List<Pair<Long, Long>> {
-        val pid = attachedPid ?: return emptyList()
-
-        return try {
-            val mapsResult = RootManager.executeRootCommand("cat /proc/$pid/maps 2>/dev/null") ?: return emptyList()
-            val regions = mutableListOf<Triple<Long, Long, Int>>()
-
-            for (line in mapsResult.lines()) {
-                if (line.isBlank()) continue
-                val parts = line.split(" ")
-                if (parts.isEmpty()) continue
-
-                val addrRange = parts[0].split("-")
-                if (addrRange.size != 2) continue
-
-                val startAddr = addrRange[0].toLongOrNull(16) ?: continue
-                val endAddr = addrRange[1].toLongOrNull(16) ?: continue
-                val permissions = if (parts.size > 1) parts[1] else "----"
-                val name = if (parts.size > 5) parts.subList(5, parts.size).joinToString(" ") else ""
-
-                val regionSize = endAddr - startAddr
-
-                // 跳过太大的区域和太小的区域
-                if (regionSize > 50 * 1024 * 1024 || regionSize <= 0) continue
-
-                // 只保留可读写的段
-                if (!permissions.contains('r') || !permissions.contains('w')) continue
-
-                val priority = calculateRegionPriority(permissions, name)
-                regions.add(Triple(startAddr, endAddr, priority))
-            }
-
-            // 按优先级排序，返回前 N 个高优先级段
-            regions.sortByDescending { it.third }
-            regions.take(20).map { Pair(it.first, it.second) }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    // ==================== 精确搜索 ====================
-
-    /**
-     * 精确搜索内存
-     * 使用分块读取（2MB chunk）避免 OOM
-     */
     fun searchExact(value: Any, type: String): List<Map<String, Any>> {
         val pid = attachedPid ?: return emptyList()
+        if (activeRegions.isEmpty()) return emptyList()
 
         return try {
             val targetBytes = valueToBytes(value, type) ?: return emptyList()
-            val results = mutableListOf<Map<String, Any>>()
-            val regions = getHighPriorityRegions()
-
-            for ((startAddr, endAddr) in regions) {
-                val regionSize = endAddr - startAddr
-                val chunkSize = 2 * 1024 * 1024L  // 2MB chunk
-
-                var offset = 0L
-                while (offset < regionSize) {
-                    val currentChunkSize = minOf(chunkSize, regionSize - offset)
-                    val chunkData = readMemoryChunk(pid, startAddr + offset, currentChunkSize.toInt()) ?: break
-
-                    // 在 chunk 中搜索
-                    val foundOffsets = searchInChunk(chunkData, targetBytes)
-                    for (foundOffset in foundOffsets) {
-                        val address = startAddr + offset + foundOffset
-                        results.add(createResultMap(address, value, type))
-
-                        if (results.size >= 500) break
-                    }
-
-                    if (results.size >= 500) break
-                    offset += chunkSize - targetBytes.size + 1  // 重叠搜索避免边界遗漏
-                }
-                if (results.size >= 500) break
-            }
-
-            // 保存快照用于模糊搜索
-            saveSnapshot(results, type)
-
-            results
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    /**
-     * 范围搜索
-     */
-    fun searchByRange(minValue: Long, maxValue: Long, type: String): List<Map<String, Any>> {
-        val pid = attachedPid ?: return emptyList()
-
-        return try {
-            val results = mutableListOf<Map<String, Any>>()
-            val regions = getHighPriorityRegions()
             val typeSize = getTypeSize(type)
 
-            for ((startAddr, endAddr) in regions) {
-                val regionSize = endAddr - startAddr
-                val chunkSize = 2 * 1024 * 1024L
+            val targetHex = targetBytes.joinToString(" ") { String.format("%02X", it) }
+            val totalMB = activeRegions.sumOf { it.endAddr - it.startAddr } / 1024 / 1024
+            Log.d(TAG, "🎯 搜索值: $value, 类型: $type, Hex: [$targetHex]")
+            Log.d(TAG, "📊 段数: ${activeRegions.size}, 总体积: ${totalMB}MB")
 
-                var offset = 0L
-                while (offset < regionSize) {
-                    val currentChunkSize = minOf(chunkSize, regionSize - offset)
-                    val chunkData = readMemoryChunk(pid, startAddr + offset, currentChunkSize.toInt()) ?: break
+            val startTime = System.currentTimeMillis()
 
-                    // 按类型大小步进，检查每个位置的值是否在范围内
-                    var pos = 0
-                    while (pos + typeSize <= chunkData.size) {
-                        val address = startAddr + offset + pos
-                        val value = bytesToValue(chunkData.sliceArray(pos until pos + typeSize), type)
-                        if (value != null) {
-                            val longValue = when (value) {
-                                is Float -> value.toLong()
-                                is Double -> value.toLong()
-                                else -> (value as? Number)?.toLong() ?: 0
-                            }
-                            if (longValue in minValue..maxValue) {
-                                results.add(createResultMap(address, value, type))
-                            }
-                        }
-                        pos += typeSize
-
-                        if (results.size >= 500) break
-                    }
-
-                    if (results.size >= 500) break
-                    offset += chunkSize
-                }
-                if (results.size >= 500) break
+            // 使用 RootScanner（异步执行）
+            val addresses = runBlocking {
+                RootScanner.searchExact(pid, activeRegions, typeSize, targetBytes)
             }
 
-            // 保存快照
-            saveSnapshot(results, type)
+            val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+            Log.d(TAG, "⚡ searchExact: ${addresses.size} results in ${String.format("%.2f", elapsed)}s")
 
+            val results = addresses.map { addr -> createResultMap(addr, value, type) }
+            enrichWithMachineCode(pid, results)
+            saveSnapshot(results, type)
             results
         } catch (e: Exception) {
+            Log.e(TAG, "searchExact failed: ${e.message}", e)
             emptyList()
         }
     }
 
-    /**
-     * 在之前的结果中过滤
-     */
-    fun filterResults(previousAddresses: List<Int>, value: Any, type: String): List<Map<String, Any>> {
+    fun searchByRange(minValue: Long, maxValue: Long, type: String): List<Map<String, Any>> {
+        val pid = attachedPid ?: return emptyList()
+        if (activeRegions.isEmpty()) return emptyList()
+
+        return try {
+            val typeSize = getTypeSize(type)
+
+            val addresses = runBlocking {
+                RootScanner.searchRange(pid, activeRegions, typeSize, minValue, maxValue)
+            }
+            
+            val placeholder: Any = if (type == "float") minValue.toFloat() else minValue
+            val results = addresses.map { addr -> createResultMap(addr, placeholder, type) }
+            enrichWithMachineCode(pid, results)
+            saveSnapshot(results, type)
+            results
+        } catch (e: Exception) { emptyList() }
+    }
+
+    fun filterResults(previousAddresses: List<Long>, value: Any, type: String): List<Map<String, Any>> {
         val pid = attachedPid ?: return emptyList()
 
         return try {
-            val results = mutableListOf<Map<String, Any>>()
+            val typeSize = getTypeSize(type)
+            val targetBytes = valueToBytes(value, type) ?: return emptyList()
 
+            // 使用模糊搜索的逻辑来过滤
+            val results = mutableListOf<MutableMap<String, Any>>()
             for (addr in previousAddresses) {
-                val readValue = readMemory(addr, type)
-                if (readValue != null && valuesEqual(readValue, value, type)) {
-                    results.add(createResultMap(addr.toLong(), value, type))
+                val bytes = runBlocking {
+                    RootScanner.readMemory(pid, addr, typeSize)
+                }
+                if (bytes != null && bytes.contentEquals(targetBytes)) {
+                    results.add(createResultMap(addr, value, type))
                 }
             }
 
-            // 保存快照
-            saveSnapshot(results, type)
-
+            if (results.isNotEmpty()) {
+                enrichWithMachineCode(pid, results)
+                saveSnapshot(results, type)
+            }
             results
-        } catch (e: Exception) {
-            emptyList()
-        }
+        } catch (e: Exception) { emptyList() }
     }
 
-    // ==================== 模糊搜索 ====================
-
-    /**
-     * 模糊搜索（未知值搜索）
-     * 支持：changed, unchanged, increased, decreased, greater, less, equal, not_equal
-     */
     fun searchFuzzy(comparison: String, type: String): List<Map<String, Any>> {
         val pid = attachedPid ?: return emptyList()
 
         if (lastSnapshot.isEmpty()) {
-            // 第一次搜索，保存当前状态作为快照
             val initialResults = searchAllValues(type)
             saveSnapshot(initialResults, type)
             return initialResults
         }
 
         return try {
-            val results = mutableListOf<Map<String, Any>>()
-
-            for ((address, oldBytes) in lastSnapshot) {
-                val currentValue = readMemoryBytes(pid, address, oldBytes.size)
-                if (currentValue == null) continue
-
-                val oldVal = bytesToValue(oldBytes, type)
-                val newVal = bytesToValue(currentValue, type)
-
-                if (oldVal == null || newVal == null) continue
-
-                val matches = when (comparison) {
-                    "changed" -> !valuesEqual(oldVal, newVal, type)
-                    "unchanged" -> valuesEqual(oldVal, newVal, type)
-                    "increased" -> compareValues(newVal, oldVal, type) > 0
-                    "decreased" -> compareValues(newVal, oldVal, type) < 0
-                    "greater" -> compareValues(newVal, oldVal, type) > 0
-                    "less" -> compareValues(newVal, oldVal, type) < 0
-                    "equal" -> valuesEqual(oldVal, newVal, type)
-                    "not_equal" -> !valuesEqual(oldVal, newVal, type)
-                    else -> false
+            val typeSize = getTypeSize(type)
+            val addresses = lastSnapshot.keys.toList()
+            val oldValues = ByteArray(addresses.size * typeSize)
+            
+            // 构建旧值数组
+            addresses.forEachIndexed { index, addr ->
+                val bytes = lastSnapshot[addr] ?: return@forEachIndexed
+                System.arraycopy(bytes, 0, oldValues, index * typeSize, typeSize)
+            }
+            
+            val mode = when (comparison) {
+                "changed" -> 0
+                "unchanged" -> 1
+                "increased" -> 2
+                "decreased" -> 3
+                else -> 0
+            }
+            
+            val resultAddrs = runBlocking {
+                RootScanner.searchFuzzy(pid, addresses, oldValues, mode, typeSize)
+            }
+            
+            val results = resultAddrs.map { addr ->
+                val bytes = runBlocking {
+                    RootScanner.readMemory(pid, addr, typeSize)
                 }
+                val value = if (bytes != null) bytesToValue(bytes, type) else 0
+                createResultMap(addr, value ?: 0, type)
+            }
+            enrichWithMachineCode(pid, results)
+            saveSnapshot(results, type)
+            results
+        } catch (e: Exception) { emptyList() }
+    }
 
-                if (matches) {
-                    results.add(createResultMap(address, newVal, type))
+    fun searchAob(pattern: String, mask: String? = null): List<Map<String, Any>> {
+        val pid = attachedPid ?: return emptyList()
+        if (activeRegions.isEmpty()) return emptyList()
+
+        // 检测是否为地址格式（0x开头的单个十六进制数）
+        val addrLong = parseAddress(pattern)
+        if (addrLong != null) {
+            return readAddressValues(pid, addrLong)
+        }
+
+        return try {
+            val (patternBytes, maskBytes) = parseAobPattern(pattern)
+            if (patternBytes.isEmpty()) return emptyList()
+
+            // 如果外部传了 mask，覆盖内部生成的
+            val finalMask = if (mask != null) {
+                ByteArray(patternBytes.size) { i ->
+                    if (i < mask.length && mask[i] == '?') 0.toByte() else maskBytes[i]
                 }
+            } else maskBytes
 
-                if (results.size >= 500) break
+            val addresses = runBlocking {
+                RootScanner.searchAob(pid, activeRegions, patternBytes, finalMask)
             }
 
-            // 更新快照
-            saveSnapshot(results, type)
+            addresses.map { addr ->
+                val ctx = runBlocking {
+                    RootScanner.readMemory(pid, addr - 16, patternBytes.size + 32)
+                }
+                if (ctx != null) aobDatabase[addr] = AobSignature(addr, pattern, ctx, 16)
+                val mc = runBlocking { RootScanner.readMemory(pid, addr, 8) }
+                val mcStr = mc?.joinToString(" ") { String.format("%02X", it) } ?: ""
+                // 读取该地址的实际值（dword）
+                val valBytes = runBlocking { RootScanner.readMemory(pid, addr, 4) }
+                val actualValue: Any = if (valBytes != null) bytesToValue(valBytes, "dword") ?: 0 else 0
+                mapOf("address" to "0x${addr.toString(16).uppercase()}", "addressInt" to addr,
+                    "value" to actualValue, "type" to "aob", "isFavorite" to false, "isFrozen" to false,
+                    "machineCode" to mcStr)
+            }
+        } catch (e: Exception) { emptyList() }
+    }
 
-            results
-        } catch (e: Exception) {
-            emptyList()
+    // 解析地址格式，返回 Long 或 null
+    private fun parseAddress(input: String): Long? {
+        val s = input.trim()
+        return when {
+            s.startsWith("0x", ignoreCase = true) -> s.substring(2).toLongOrNull(16)
+            // 纯十六进制且长度>=6（至少3字节地址）也视为地址
+            s.length >= 6 && s.all { it.isDigit() || it in "abcdefABCDEF" } -> s.toLongOrNull(16)
+            else -> null
         }
     }
 
-    /**
-     * 搜索所有可读写区域的值（用于首次模糊搜索）
-     */
-    private fun searchAllValues(type: String): List<Map<String, Any>> {
-        val pid = attachedPid ?: return emptyList()
-        val typeSize = getTypeSize(type)
+    // 读取指定地址处的各种类型值
+    private fun readAddressValues(pid: Int, address: Long): List<Map<String, Any>> {
         val results = mutableListOf<Map<String, Any>>()
-        val regions = getHighPriorityRegions()
-
-        for ((startAddr, endAddr) in regions) {
-            val regionSize = endAddr - startAddr
-            val chunkSize = 2 * 1024 * 1024L
-
-            var offset = 0L
-            while (offset < regionSize) {
-                val currentChunkSize = minOf(chunkSize, regionSize - offset)
-                val chunkData = readMemoryChunk(pid, startAddr + offset, currentChunkSize.toInt()) ?: break
-
-                // 按类型大小步进，记录每个位置的值
-                var pos = 0
-                while (pos + typeSize <= chunkData.size) {
-                    val address = startAddr + offset + pos
-                    val value = bytesToValue(chunkData.sliceArray(pos until pos + typeSize), type)
+        // 读取机器码
+        val mc = runBlocking { RootScanner.readMemory(pid, address, 8) }
+        val mcStr = mc?.joinToString(" ") { String.format("%02X", it) } ?: ""
+        // 读取多种类型的值
+        val types = listOf("dword" to 4, "float" to 4, "double" to 8, "word" to 2, "byte" to 1)
+        for ((type, size) in types) {
+            try {
+                val bytes = runBlocking { RootScanner.readMemory(pid, address, size) }
+                if (bytes != null && bytes.size == size) {
+                    val value = bytesToValue(bytes, type)
                     if (value != null) {
-                        results.add(createResultMap(address, value, type))
+                        results.add(mapOf(
+                            "address" to "0x${address.toString(16).uppercase()}",
+                            "addressInt" to address,
+                            "value" to value,
+                            "type" to type,
+                            "isFavorite" to false,
+                            "isFrozen" to false,
+                            "machineCode" to mcStr
+                        ))
                     }
-                    pos += typeSize
-
-                    if (results.size >= 500) break
                 }
-
-                if (results.size >= 500) break
-                offset += chunkSize
-            }
-            if (results.size >= 500) break
+            } catch (_: Exception) {}
         }
-
         return results
     }
 
-    // ==================== 特征码搜索 (AOB Scan) ====================
-
-    /**
-     * 特征码搜索
-     * 记录目标地址前后的 16 字节切片，用于重启后重定位
-     */
-    fun searchAob(pattern: String, mask: String? = null): List<Map<String, Any>> {
-        val pid = attachedPid ?: return emptyList()
-
-        return try {
-            val patternBytes = parseAobPattern(pattern)
-            if (patternBytes.isEmpty()) return emptyList()
-
-            val results = mutableListOf<Map<String, Any>>()
-            val regions = getHighPriorityRegions()
-
-            for ((startAddr, endAddr) in regions) {
-                val regionSize = endAddr - startAddr
-                val chunkSize = 2 * 1024 * 1024L
-
-                var offset = 0L
-                while (offset < regionSize) {
-                    val currentChunkSize = minOf(chunkSize, regionSize - offset)
-                    val chunkData = readMemoryChunk(pid, startAddr + offset, currentChunkSize.toInt()) ?: break
-
-                    val foundOffsets = searchAobInChunk(chunkData, patternBytes, mask)
-                    for (foundOffset in foundOffsets) {
-                        val address = startAddr + offset + foundOffset
-
-                        // 保存特征码签名（前后各 16 字节）
-                        val signatureStart = maxOf(0, foundOffset - 16)
-                        val signatureEnd = minOf(chunkData.size, foundOffset + patternBytes.size + 16)
-                        val signatureBytes = chunkData.sliceArray(signatureStart until signatureEnd)
-
-                        aobDatabase[address] = AobSignature(
-                            address = address,
-                            pattern = pattern,
-                            contextBytes = signatureBytes,
-                            contextOffset = foundOffset - signatureStart
-                        )
-
-                        results.add(mapOf(
-                            "address" to "0x${address.toString(16).uppercase()}",
-                            "addressInt" to address.toInt(),
-                            "value" to pattern,
-                            "type" to "aob",
-                            "isFavorite" to false,
-                            "isFrozen" to false
-                        ))
-
-                        if (results.size >= 500) break
-                    }
-
-                    if (results.size >= 500) break
-                    offset += chunkSize - patternBytes.size + 1
-                }
-                if (results.size >= 500) break
-            }
-
-            results
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    /**
-     * 重启后重定位（使用特征码数据库）
-     */
     fun relocateAobSignatures(): List<Map<String, Any>> {
         val pid = attachedPid ?: return emptyList()
-
-        if (aobDatabase.isEmpty()) return emptyList()
+        if (aobDatabase.isEmpty() || activeRegions.isEmpty()) return emptyList()
 
         return try {
             val results = mutableListOf<Map<String, Any>>()
-            val regions = getHighPriorityRegions()
 
-            for ((address, signature) in aobDatabase) {
-                var found = false
-
-                for ((startAddr, endAddr) in regions) {
-                    val regionSize = endAddr - startAddr
-                    val chunkSize = 2 * 1024 * 1024L
-
-                    var offset = 0L
-                    while (offset < regionSize) {
-                        val currentChunkSize = minOf(chunkSize, regionSize - offset)
-                        val chunkData = readMemoryChunk(pid, startAddr + offset, currentChunkSize.toInt()) ?: break
-
-                        // 在 chunk 中搜索特征码上下文
-                        val contextPattern = signature.contextBytes
-                        val foundOffsets = searchInChunk(chunkData, contextPattern)
-
-                        for (foundOffset in foundOffsets) {
-                            val newAddress = startAddr + offset + foundOffset + signature.contextOffset
-
-                            results.add(mapOf(
-                                "address" to "0x${newAddress.toString(16).uppercase()}",
-                                "addressInt" to newAddress.toInt(),
-                                "value" to signature.pattern,
-                                "type" to "aob",
-                                "isFavorite" to false,
-                                "isFrozen" to false,
-                                "relocated" to true,
-                                "oldAddress" to "0x${address.toString(16).uppercase()}"
-                            ))
-
-                            found = true
-                            break
-                        }
-
-                        if (found) break
-                        offset += chunkSize
-                    }
-                    if (found) break
+            for ((address, sig) in aobDatabase) {
+                val mask = ByteArray(sig.contextBytes.size) { 1.toByte() }
+                val found = runBlocking {
+                    RootScanner.searchAob(pid, activeRegions, sig.contextBytes, mask)
+                }
+                if (found.isNotEmpty()) {
+                    val newAddr = found[0] + sig.contextOffset
+                    val mc = runBlocking { RootScanner.readMemory(pid, newAddr, 8) }
+                    val mcStr = mc?.joinToString(" ") { String.format("%02X", it) } ?: ""
+                    val valBytes = runBlocking { RootScanner.readMemory(pid, newAddr, 4) }
+                    val actualValue: Any = if (valBytes != null) bytesToValue(valBytes, "dword") ?: 0 else 0
+                    results.add(mapOf("address" to "0x${newAddr.toString(16).uppercase()}", "addressInt" to newAddr,
+                        "value" to actualValue, "type" to "aob", "isFavorite" to false, "isFrozen" to false,
+                        "relocated" to true, "oldAddress" to "0x${address.toString(16).uppercase()}",
+                        "machineCode" to mcStr))
                 }
             }
-
             results
-        } catch (e: Exception) {
-            emptyList()
-        }
+        } catch (e: Exception) { emptyList() }
     }
 
     // ==================== 内存读写 ====================
 
-    /**
-     * 读取内存值
-     */
-    fun readMemory(address: Int, type: String): Any? {
+    fun readMemory(address: Long, type: String): Any? {
         val pid = attachedPid ?: return null
-
         return try {
-            val size = getTypeSize(type)
-            val bytes = readMemoryBytes(pid, address.toLong(), size) ?: return null
+            val typeSize = getTypeSize(type)
+            val bytes = runBlocking {
+                RootScanner.readMemory(pid, address, typeSize)
+            } ?: return null
             bytesToValue(bytes, type)
         } catch (e: Exception) {
+            Log.e(TAG, "readMemory failed: ${e.message}")
             null
         }
     }
 
-    /**
-     * 写入内存值
-     */
-    fun writeMemory(address: Int, value: Any, type: String): Boolean {
-        val pid = attachedPid ?: return false
+    // 兼容旧调用
+    fun readMemory(address: Int, type: String): Any? = readMemory(address.toLong(), type)
 
+    fun writeMemory(address: Long, value: Any, type: String): Boolean {
+        val pid = attachedPid ?: return false
         return try {
             val bytes = valueToBytes(value, type) ?: return false
-            writeMemoryBytes(pid, address.toLong(), bytes)
+            runBlocking {
+                RootScanner.writeMemory(pid, address, bytes)
+            }
         } catch (e: Exception) {
+            Log.e(TAG, "writeMemory failed: ${e.message}")
             false
         }
     }
 
-    /**
-     * 批量写入
-     */
+    // 兼容旧调用
+    fun writeMemory(address: Int, value: Any, type: String): Boolean = writeMemory(address.toLong(), value, type)
+
     fun writeBatch(requests: List<Map<String, Any>>): Boolean {
-        var allSuccess = true
+        var ok = true
         for (req in requests) {
-            val address = req["address"] as? Int ?: continue
-            val value = req["value"] ?: continue
-            val type = req["type"] as? String ?: "dword"
-            if (!writeMemory(address, value, type)) allSuccess = false
+            val addr = (req["address"] as? Number)?.toLong() ?: continue
+            val v = req["value"] ?: continue
+            val t = req["type"] as? String ?: "dword"
+            if (!writeMemory(addr, v, t)) ok = false
         }
-        return allSuccess
+        return ok
     }
 
-    /**
-     * 分析指定地址周围的内存区域
-     */
-    fun analyzeMemoryRegion(address: Int, range: Int): Map<String, Any> {
+    fun analyzeMemoryRegion(address: Long, range: Int): Map<String, Any> {
         val pid = attachedPid ?: return emptyMap()
+        return try {
+            val data = runBlocking {
+                RootScanner.readMemory(pid, (address - range).coerceAtLeast(0), range * 2)
+            } ?: return emptyMap()
+            mapOf("address" to address, "range" to range, "data" to data.joinToString("") { "%02x".format(it) }, "size" to data.size)
+        } catch (e: Exception) { emptyMap() }
+    }
+
+    // 兼容旧调用
+    fun analyzeMemoryRegion(address: Int, range: Int): Map<String, Any> = analyzeMemoryRegion(address.toLong(), range)
+
+    private fun searchAllValues(type: String): List<Map<String, Any>> {
+        val pid = attachedPid ?: return emptyList()
+        if (activeRegions.isEmpty()) return emptyList()
 
         return try {
-            val startAddr = (address.toLong() - range).coerceAtLeast(0)
-            val length = range * 2
+            val typeSize = getTypeSize(type)
 
-            val data = readMemoryChunk(pid, startAddr, length) ?: return emptyMap()
-
-            // 转换为十六进制字符串
-            val hexString = data.joinToString("") { "%02x".format(it) }
-
-            mapOf(
-                "address" to address,
-                "range" to range,
-                "data" to hexString,
-                "size" to data.size
-            )
-        } catch (e: Exception) {
-            emptyMap()
-        }
-    }
-
-    // ==================== 底层 IO 操作 ====================
-
-    /**
-     * 分块读取内存（2MB chunk）
-     * 使用持久化 Root Shell，避免频繁 su 弹窗
-     */
-    private fun readMemoryChunk(pid: Int, address: Long, size: Int): ByteArray? {
-        return try {
-            val hexAddr = address.toString(16)
-            val result = RootManager.executeRootCommand(
-                "xxd -s 0x$hexAddr -l $size -p /proc/$pid/mem 2>/dev/null"
-            ) ?: return null
-
-            val hexStr = result.trim().replace(" ", "").replace("\n", "")
-            if (hexStr.length < size * 2) return null
-
-            hexStringToBytes(hexStr)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * 读取指定地址的字节数组
-     */
-    private fun readMemoryBytes(pid: Int, address: Long, size: Int): ByteArray? {
-        return readMemoryChunk(pid, address, size)
-    }
-
-    /**
-     * 写入字节数组到指定地址
-     * 使用 printf + dd，避免创建临时文件
-     */
-    private fun writeMemoryBytes(pid: Int, address: Long, bytes: ByteArray): Boolean {
-        return try {
-            val hexAddr = address.toString(16)
-            val hexValue = bytes.joinToString("") { "%02x".format(it) }
-            val byteCount = bytes.size
-
-            // 使用 printf 写入
-            val escapedHex = hexValue.chunked(2).joinToString("\\\\x") { "\\\\x$it" }
-            val cmd = "printf '$escapedHex' | dd of=/proc/$pid/mem bs=1 seek=0x$hexAddr count=$byteCount conv=notrunc 2>/dev/null"
-            val result = RootManager.executeRootCommand(cmd)
-            result != null
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    // ==================== 搜索辅助函数 ====================
-
-    /**
-     * 在 chunk 中搜索目标字节序列
-     */
-    private fun searchInChunk(chunk: ByteArray, target: ByteArray): List<Int> {
-        val results = mutableListOf<Int>()
-        if (target.isEmpty() || chunk.size < target.size) return results
-
-        for (i in 0..chunk.size - target.size) {
-            var match = true
-            for (j in target.indices) {
-                if (chunk[i + j] != target[j]) {
-                    match = false
-                    break
-                }
+            val addresses = runBlocking {
+                RootScanner.searchRange(pid, activeRegions, typeSize, Long.MIN_VALUE, Long.MAX_VALUE)
             }
-            if (match) {
-                results.add(i)
-            }
-        }
-
-        return results
+            
+            val placeholder: Any = if (type == "float") 0.0f else if (type == "double") 0.0 else 0
+            addresses.map { addr -> createResultMap(addr, placeholder, type) }
+        } catch (e: Exception) { emptyList() }
     }
 
-    /**
-     * 在 chunk 中搜索 AOB 模式（支持通配符）
-     */
-    private fun searchAobInChunk(chunk: ByteArray, pattern: ByteArray, mask: String?): List<Int> {
-        val results = mutableListOf<Int>()
-        if (pattern.isEmpty() || chunk.size < pattern.size) return results
+    // ==================== 快照 ====================
 
-        for (i in 0..chunk.size - pattern.size) {
-            var match = true
-            for (j in pattern.indices) {
-                // 如果有 mask，跳过通配符位置
-                if (mask != null && j < mask.length && mask[j] == '?') continue
-
-                if (chunk[i + j] != pattern[j]) {
-                    match = false
-                    break
-                }
-            }
-            if (match) {
-                results.add(i)
-            }
-        }
-
-        return results
-    }
-
-    /**
-     * 解析 AOB 模式字符串
-     * 支持格式："48 89 5C 24 ? 48 89 74 24 ?" 或 "48895C24??48897424"
-     */
-    private fun parseAobPattern(pattern: String): ByteArray {
-        val cleanPattern = pattern.replace(" ", "").replace("?", "00")
-        val bytes = mutableListOf<Byte>()
-
-        var i = 0
-        while (i < cleanPattern.length - 1) {
-            val byteStr = cleanPattern.substring(i, i + 2)
-            if (byteStr == "00" && pattern.contains("?")) {
-                bytes.add(0)  // 通配符位置
-            } else {
-                bytes.add(byteStr.toInt(16).toByte())
-            }
-            i += 2
-        }
-
-        return bytes.toByteArray()
-    }
-
-    // ==================== 数据转换函数 ====================
-
-    /**
-     * 获取数据类型大小
-     */
-    fun getTypeSize(type: String): Int {
-        return when (type) {
-            "byte" -> 1
-            "word" -> 2
-            "dword" -> 4
-            "qword" -> 8
-            "float" -> 4
-            "double" -> 8
-            else -> 4
-        }
-    }
-
-    /**
-     * 值转换为字节数组（Little Endian）
-     */
-    private fun valueToBytes(value: Any, type: String): ByteArray? {
-        return try {
-            when (type) {
-                "byte" -> {
-                    val v = (value as? Number)?.toInt() ?: return null
-                    byteArrayOf(v.toByte())
-                }
-                "word" -> {
-                    val v = (value as? Number)?.toInt() ?: return null
-                    ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(v.toShort()).array()
-                }
-                "dword" -> {
-                    val v = (value as? Number)?.toInt() ?: return null
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array()
-                }
-                "qword" -> {
-                    val v = (value as? Number)?.toLong() ?: return null
-                    ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(v).array()
-                }
-                "float" -> {
-                    val v = (value as? Number)?.toFloat() ?: return null
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putFloat(v).array()
-                }
-                "double" -> {
-                    val v = (value as? Number)?.toDouble() ?: return null
-                    ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(v).array()
-                }
-                else -> null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * 字节数组转换为值（Little Endian）
-     */
-    private fun bytesToValue(bytes: ByteArray, type: String): Any? {
-        return try {
-            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-            when (type) {
-                "byte" -> bytes[0].toInt() and 0xFF
-                "word" -> buffer.short.toInt() and 0xFFFF
-                "dword" -> buffer.int
-                "qword" -> buffer.long
-                "float" -> buffer.float
-                "double" -> buffer.double
-                else -> null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * 十六进制字符串转换为字节数组
-     */
-    private fun hexStringToBytes(hex: String): ByteArray {
-        val bytes = ByteArray(hex.length / 2)
-        for (i in bytes.indices) {
-            bytes[i] = hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-        }
-        return bytes
-    }
-
-    /**
-     * 比较两个值是否相等
-     */
-    private fun valuesEqual(a: Any, b: Any, type: String): Boolean {
-        return try {
-            when (type) {
-                "float" -> Math.abs((a as Number).toFloat() - (b as Number).toFloat()) < 0.001
-                "double" -> Math.abs((a as Number).toDouble() - (b as Number).toDouble()) < 0.0001
-                else -> (a as? Number)?.toLong() == (b as? Number)?.toLong()
-            }
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * 比较两个值的大小
-     * 返回：正数表示 a > b，负数表示 a < b，0 表示相等
-     */
-    private fun compareValues(a: Any, b: Any, type: String): Int {
-        return try {
-            when (type) {
-                "float" -> (a as Number).toFloat().compareTo((b as Number).toFloat())
-                "double" -> (a as Number).toDouble().compareTo((b as Number).toDouble())
-                else -> (a as Number).toLong().compareTo((b as Number).toLong())
-            }
-        } catch (e: Exception) {
-            0
-        }
-    }
-
-    /**
-     * 创建结果 Map
-     */
-    private fun createResultMap(address: Long, value: Any, type: String): Map<String, Any> {
-        return mapOf(
-            "address" to "0x${address.toString(16).uppercase()}",
-            "addressInt" to address.toInt(),
-            "value" to value,
-            "type" to type,
-            "isFavorite" to false,
-            "isFrozen" to false
-        )
-    }
-
-    /**
-     * 保存快照（用于模糊搜索对比）
-     */
     private fun saveSnapshot(results: List<Map<String, Any>>, type: String) {
         val pid = attachedPid ?: return
         val typeSize = getTypeSize(type)
+        val addresses = results.mapNotNull { (it["addressInt"] as? Number)?.toLong() }
+        if (addresses.isEmpty()) return
+
         val snapshot = mutableMapOf<Long, ByteArray>()
-
-        for (result in results) {
-            val address = result["addressInt"] as? Int ?: continue
-            val bytes = readMemoryBytes(pid, address.toLong(), typeSize)
-            if (bytes != null) {
-                snapshot[address.toLong()] = bytes
+        for (addr in addresses) {
+            val b = runBlocking {
+                RootScanner.readMemory(pid, addr, typeSize)
             }
+            if (b != null) snapshot[addr] = b
         }
-
         lastSnapshot = snapshot
     }
 
-    // ==================== 数据类 ====================
+    // ==================== 工具函数 ====================
 
-    data class MemoryRegionInfo(
-        val startAddr: Long,
-        val endAddr: Long,
-        val permissions: String,
-        val name: String,
-        val priority: Int
+    // 解析 AOB 特征码，返回 Pair(patternBytes, maskBytes)，mask=1精确匹配，0=通配
+    private fun parseAobPattern(input: String): Pair<ByteArray, ByteArray> {
+        var raw = input.trim()
+        // 去除 0x/0X 前缀
+        if (raw.startsWith("0x", ignoreCase = true)) raw = raw.substring(2)
+
+        // 按空格分割，如果没有空格则每2字符分割（但 ?? 需特殊处理）
+        val tokens: List<String> = if (raw.contains(" ")) {
+            raw.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+        } else {
+            // 连续格式：先把 ?? 提出来，再每2字符分割
+            val result = mutableListOf<String>()
+            var j = 0
+            while (j < raw.length) {
+                if (j + 1 < raw.length && raw[j] == '?' && raw[j + 1] == '?') {
+                    result.add("??")
+                    j += 2
+                } else if (j + 1 < raw.length) {
+                    result.add(raw.substring(j, j + 2))
+                    j += 2
+                } else {
+                    j++ // 跳过奇数末尾
+                }
+            }
+            result
+        }
+
+        val patternBytes = mutableListOf<Byte>()
+        val maskBytes = mutableListOf<Byte>()
+        for (token in tokens) {
+            if (token == "??") {
+                patternBytes.add(0)
+                maskBytes.add(0) // 通配
+            } else {
+                patternBytes.add(token.toInt(16).toByte())
+                maskBytes.add(1) // 精确匹配
+            }
+        }
+        return Pair(patternBytes.toByteArray(), maskBytes.toByteArray())
+    }
+
+    fun getTypeSize(type: String): Int = when (type) {
+        "byte" -> 1; "word" -> 2; "dword" -> 4; "qword" -> 8; "float" -> 4; "double" -> 8; else -> 4
+    }
+
+    private fun valueToBytes(value: Any, type: String): ByteArray? {
+        return try {
+            val num = value as? Number ?: return null
+            when (type) {
+                "byte" -> byteArrayOf(num.toInt().toByte())
+                "word" -> ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(num.toShort()).array()
+                "dword" -> ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(num.toInt()).array()
+                "qword" -> ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(num.toLong()).array()
+                "float" -> ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putFloat(num.toFloat()).array()
+                "double" -> ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(num.toDouble()).array()
+                else -> null
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private fun bytesToValue(bytes: ByteArray, type: String): Any? {
+        return try {
+            val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            when (type) {
+                "byte" -> bytes[0].toInt() and 0xFF
+                "word" -> buf.short.toInt() and 0xFFFF
+                "dword" -> buf.int; "qword" -> buf.long
+                "float" -> buf.float; "double" -> buf.double
+                else -> null
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private fun valuesEqual(a: Any, b: Any, type: String): Boolean = try {
+        when (type) {
+            "float" -> Math.abs((a as Number).toFloat() - (b as Number).toFloat()) < 0.001
+            "double" -> Math.abs((a as Number).toDouble() - (b as Number).toDouble()) < 0.0001
+            else -> (a as? Number)?.toLong() == (b as? Number)?.toLong()
+        }
+    } catch (e: Exception) { false }
+
+    private fun compareValues(a: Any, b: Any, type: String): Int = try {
+        when (type) {
+            "float" -> (a as Number).toFloat().compareTo((b as Number).toFloat())
+            "double" -> (a as Number).toDouble().compareTo((b as Number).toDouble())
+            else -> (a as Number).toLong().compareTo((b as Number).toLong())
+        }
+    } catch (e: Exception) { 0 }
+
+    private fun createResultMap(address: Long, value: Any, type: String): MutableMap<String, Any> = mutableMapOf(
+        "address" to "0x${address.toString(16).uppercase()}", "addressInt" to address,
+        "value" to value, "type" to type, "isFavorite" to false, "isFrozen" to false
     )
 
-    data class AobSignature(
-        val address: Long,
-        val pattern: String,
-        val contextBytes: ByteArray,
-        val contextOffset: Int
-    ) {
-        override fun equals(other: Any?): Boolean {
-            if (this === other) return true
-            if (javaClass != other?.javaClass) return false
-            other as AobSignature
-            return address == other.address
-        }
-
-        override fun hashCode(): Int {
-            return address.hashCode()
+    // 为搜索结果批量读取机器码（地址处的原始字节）
+    private fun enrichWithMachineCode(pid: Int, results: List<MutableMap<String, Any>>) {
+        for (r in results) {
+            val addr = r["addressInt"] as? Long ?: continue
+            try {
+                val bytes = runBlocking { RootScanner.readMemory(pid, addr, 8) }
+                if (bytes != null) {
+                    r["machineCode"] = bytes.joinToString(" ") { String.format("%02X", it) }
+                }
+            } catch (_: Exception) {}
         }
     }
+
+    data class AobSignature(val address: Long, val pattern: String, val contextBytes: ByteArray, val contextOffset: Int)
 }

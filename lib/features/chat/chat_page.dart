@@ -6,12 +6,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/chat_message.dart';
 import '../../core/models/chat_session.dart';
 import '../../main.dart';
 import '../process/process_selector.dart';
+import 'markdown_webview.dart';
 
 /// 聊天消息列表 Provider
 final chatMessagesProvider = StateProvider<List<ChatMessage>>((ref) => []);
@@ -58,36 +58,46 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         mergedMap[s.id] = s;
       }
 
-      // 同时加载悬浮窗保存的聊天记录
+      // 同时加载悬浮窗保存的聊天记录（使用正确的时间戳）
       try {
         const channel = MethodChannel('com.yl.aigg/bridge');
         final result = await channel.invokeMethod('getOverlayChats');
         if (result != null && result is List) {
           for (final chatData in result) {
-            if (chatData is Map) {
-              final messages = <ChatMessage>[];
-              final chatMessages = chatData['messages'] as List? ?? [];
-              for (final msg in chatMessages) {
-                if (msg is Map) {
-                  final sender = msg['sender'] as String? ?? '';
-                  final message = msg['message'] as String? ?? '';
-                  final isUser = sender.contains('我');
-                  if (isUser) {
-                    messages.add(ChatMessage.user(message));
-                  } else {
-                    messages.add(ChatMessage.assistant(message));
-                  }
-                }
+            if (chatData is! Map) continue;
+            final chatId = chatData['id'] as String? ?? '';
+            // 已存在于 mergedMap 中的跳过
+            if (mergedMap.containsKey(chatId)) continue;
+
+            DateTime? sessionTime;
+            if (chatId.startsWith('chat_')) {
+              final ms = int.tryParse(chatId.substring(5));
+              if (ms != null) sessionTime = DateTime.fromMillisecondsSinceEpoch(ms);
+            }
+
+            final messages = <ChatMessage>[];
+            final chatMessages = chatData['messages'] as List? ?? [];
+            for (final msg in chatMessages) {
+              if (msg is! Map) continue;
+              final sender = msg['sender'] as String? ?? '';
+              final message = msg['message'] as String? ?? '';
+              final tsMs = msg['timestamp'] as int?;
+              final msgTime = tsMs != null
+                  ? DateTime.fromMillisecondsSinceEpoch(tsMs)
+                  : sessionTime;
+              final isUser = sender.contains('我');
+              if (isUser) {
+                messages.add(ChatMessage.user(message).copyWith(timestamp: msgTime));
+              } else {
+                messages.add(ChatMessage.assistant(message).copyWith(timestamp: msgTime));
               }
-              if (messages.isNotEmpty) {
-                final sessionId =
-                    chatData['id'] as String? ??
-                    DateTime.now().millisecondsSinceEpoch.toString();
-                final session = ChatSession.fromMessages(
-                  messages,
-                ).copyWith(id: sessionId);
-                mergedMap[session.id] = session;
-              }
+            }
+
+            if (messages.isNotEmpty) {
+              final session = ChatSession.fromMessages(messages).copyWith(id: chatId);
+              mergedMap[session.id] = session;
+              // 持久化到 Hive
+              await storage.saveSession(session);
             }
           }
         }
@@ -112,52 +122,64 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 加载悬浮窗保存的聊天记录
-  void _loadOverlayChats(List<ChatSession> existingSessions) {
+  Future<void> _loadOverlayChats(List<ChatSession> existingSessions) async {
     try {
       const channel = MethodChannel('com.yl.aigg/bridge');
-      channel
-          .invokeMethod('getOverlayChats')
-          .then((result) {
-            if (result != null && result is List) {
-              final overlaySessions = <ChatSession>[];
-              for (final chatData in result) {
-                if (chatData is Map) {
-                  final messages = <ChatMessage>[];
-                  final chatMessages = chatData['messages'] as List? ?? [];
-                  for (final msg in chatMessages) {
-                    if (msg is Map) {
-                      final sender = msg['sender'] as String? ?? '';
-                      final message = msg['message'] as String? ?? '';
-                      final isUser = sender.contains('我');
-                      if (isUser) {
-                        messages.add(ChatMessage.user(message));
-                      } else {
-                        messages.add(ChatMessage.assistant(message));
-                      }
-                    }
-                  }
-                  if (messages.isNotEmpty) {
-                    final sessionId =
-                        chatData['id'] as String? ??
-                        DateTime.now().millisecondsSinceEpoch.toString();
-                    final session = ChatSession.fromMessages(
-                      messages,
-                    ).copyWith(id: sessionId);
-                    overlaySessions.add(session);
-                  }
-                }
-              }
-              if (overlaySessions.isNotEmpty && mounted) {
-                final current = ref.read(chatSessionsProvider);
-                ref.read(chatSessionsProvider.notifier).state = [
-                  ...overlaySessions,
-                  ...current,
-                ];
-              }
-            }
-          })
-          .catchError((_) {});
-    } catch (e) {}
+      final result = await channel.invokeMethod('getOverlayChats');
+      if (result == null || result is! List || result.isEmpty) return;
+
+      final storage = ref.read(storageServiceProvider);
+      final existingIds = existingSessions.map((s) => s.id).toSet();
+      final overlaySessions = <ChatSession>[];
+
+      for (final chatData in result) {
+        if (chatData is! Map) continue;
+        final chatId = chatData['id'] as String? ?? '';
+        // 已存在于 Hive 中的跳过，避免重复
+        if (existingIds.contains(chatId)) continue;
+
+        // 从 session ID 提取保存时间作为 fallback（chat_1748501234567 → 1748501234567）
+        DateTime? sessionTime;
+        if (chatId.startsWith('chat_')) {
+          final ms = int.tryParse(chatId.substring(5));
+          if (ms != null) sessionTime = DateTime.fromMillisecondsSinceEpoch(ms);
+        }
+
+        final messages = <ChatMessage>[];
+        final chatMessages = chatData['messages'] as List? ?? [];
+        for (final msg in chatMessages) {
+          if (msg is! Map) continue;
+          final sender = msg['sender'] as String? ?? '';
+          final message = msg['message'] as String? ?? '';
+          final tsMs = msg['timestamp'] as int?;
+          final msgTime = tsMs != null
+              ? DateTime.fromMillisecondsSinceEpoch(tsMs)
+              : sessionTime;
+          final isUser = sender.contains('我');
+          if (isUser) {
+            messages.add(ChatMessage.user(message).copyWith(timestamp: msgTime));
+          } else {
+            messages.add(ChatMessage.assistant(message).copyWith(timestamp: msgTime));
+          }
+        }
+
+        if (messages.isNotEmpty) {
+          final session = ChatSession.fromMessages(messages).copyWith(id: chatId);
+          overlaySessions.add(session);
+        }
+      }
+
+      if (overlaySessions.isNotEmpty && mounted) {
+        // 持久化到 Hive，确保重启后时间戳不丢失
+        for (final s in overlaySessions) {
+          await storage.saveSession(s);
+        }
+        final current = ref.read(chatSessionsProvider);
+        final merged = [...overlaySessions, ...current]
+          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        ref.read(chatSessionsProvider.notifier).state = merged;
+      }
+    } catch (_) {}
   }
 
   /// 清空所有记录
@@ -165,7 +187,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
+        backgroundColor: const Color(0xFFFFF9F0),
         title: const Text('清空所有记录'),
         content: const Text('确定要清空所有对话记录吗？此操作不可撤销。'),
         actions: [
@@ -313,7 +335,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
+        backgroundColor: const Color(0xFFFFF9F0),
         title: const Text('导出对话记录'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -321,7 +343,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ListTile(
               leading: const Icon(
                 Icons.file_download,
-                color: Color(0xFF6C63FF),
+                color: Color(0xFF8D6E63),
               ),
               title: const Text('导出全部到文件'),
               subtitle: Text('将 ${sessions.length} 个会话导出为 Markdown 文件'),
@@ -331,7 +353,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.checklist, color: Color(0xFF03DAC6)),
+              leading: const Icon(Icons.checklist, color: Color(0xFF6D4C41)),
               title: const Text('选择导出'),
               subtitle: const Text('选择要导出的会话'),
               onTap: () {
@@ -384,7 +406,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ? Text('已选择 ${_selectedSessionIds.length} 项')
             : const Row(
                 children: [
-                  Icon(Icons.history, color: Color(0xFF6C63FF)),
+                  Icon(Icons.history, color: Color(0xFF8D6E63)),
                   SizedBox(width: 8),
                   Text('对话记录'),
                 ],
@@ -483,10 +505,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: const Color(0xFF2A2A2A),
+              color: const Color(0xFFFFF9F0),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: const Color(0xFF6C63FF).withOpacity(0.3),
+                color: const Color(0xFF8D6E63).withOpacity(0.3),
               ),
             ),
             child: Column(
@@ -496,7 +518,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   children: [
                     Icon(
                       Icons.info_outline,
-                      color: Color(0xFF6C63FF),
+                      color: Color(0xFF8D6E63),
                       size: 20,
                     ),
                     SizedBox(width: 8),
@@ -504,7 +526,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       '使用说明',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF6C63FF),
+                        color: Color(0xFF8D6E63),
                       ),
                     ),
                   ],
@@ -515,9 +537,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   '• 历史记录：在此页面查看所有对话历史\n'
                   '• 游戏中使用：悬浮窗更适合游戏内快速对话\n'
                   '• 手动刷新：悬浮窗保存聊天后，点击右上角 🔄 刷新按钮\n'
-                  '• 导出记录：支持单条/多条导出为 Markdown 文件\n'
-                  '• 导出路径：/storage/emulated/0/AI-gg/',
-                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                  '• 导出记录：仅支持单条记录导出为 Markdown 文件\n'
+                  '• 导出路径：安卓10 /AI-gg/  安卓11+ /Documents/AI-gg/',
+                  style: TextStyle(color: Color(0xFFA1887F), fontSize: 13),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -531,7 +553,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         icon: const Icon(Icons.chat_bubble, size: 16),
                         label: const Text('启动悬浮窗对话'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF6C63FF),
+                          backgroundColor: const Color(0xFF8D6E63),
                           padding: const EdgeInsets.symmetric(vertical: 8),
                         ),
                       ),
@@ -549,13 +571,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.history, size: 64, color: Colors.grey),
+                        Icon(Icons.history, size: 64, color: Color(0xFFA1887F)),
                         SizedBox(height: 16),
-                        Text('暂无对话记录', style: TextStyle(color: Colors.grey)),
+                        Text('暂无对话记录', style: TextStyle(color: Color(0xFFA1887F))),
                         SizedBox(height: 8),
                         Text(
                           '使用悬浮窗开始与 AI 对话',
-                          style: TextStyle(color: Colors.grey, fontSize: 12),
+                          style: TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                         ),
                       ],
                     ),
@@ -574,19 +596,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           if (sessions.isNotEmpty)
             Container(
               padding: const EdgeInsets.all(12),
-              color: const Color(0xFF2A2A2A),
+              color: const Color(0xFFFFF9F0),
               child: Row(
                 children: [
-                  const Icon(Icons.analytics, size: 16, color: Colors.grey),
+                  const Icon(Icons.analytics, size: 16, color: Color(0xFFA1887F)),
                   const SizedBox(width: 8),
                   Text(
                     '共 ${sessions.length} 个对话会话',
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    style: const TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                   ),
                   const Spacer(),
                   Text(
                     '最后更新: ${DateTime.now().toString().substring(0, 16)}',
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    style: const TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                   ),
                 ],
               ),
@@ -602,8 +624,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       color: isSelected
-          ? const Color(0xFF6C63FF).withOpacity(0.15)
-          : const Color(0xFF2A2A2A),
+          ? const Color(0xFF8D6E63).withOpacity(0.15)
+          : const Color(0xFFFFF9F0),
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
         leading: _isMultiSelectMode
@@ -618,18 +640,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     }
                   });
                 },
-                activeColor: const Color(0xFF6C63FF),
+                activeColor: const Color(0xFF8D6E63),
               )
             : Container(
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withOpacity(0.2),
+                  color: const Color(0xFF8D6E63).withOpacity(0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   _getSessionIcon(session.title),
-                  color: const Color(0xFF6C63FF),
+                  color: const Color(0xFF8D6E63),
                   size: 24,
                 ),
               ),
@@ -643,29 +665,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             const SizedBox(height: 4),
             Text(
               session.previewText,
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
+              style: const TextStyle(color: Color(0xFFA1887F), fontSize: 13),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 8),
             Row(
               children: [
-                Icon(Icons.access_time, size: 14, color: Colors.grey[600]),
+                Icon(Icons.access_time, size: 14, color: Color(0xFFA1887F)),
                 const SizedBox(width: 4),
                 Text(
                   session.formattedTime,
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  style: TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                 ),
                 const SizedBox(width: 16),
                 Icon(
                   Icons.chat_bubble_outline,
                   size: 14,
-                  color: Colors.grey[600],
+                  color: Color(0xFFA1887F),
                 ),
                 const SizedBox(width: 4),
                 Text(
                   '${session.messages.length} 条消息',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  style: TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                 ),
               ],
             ),
@@ -734,7 +756,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
+        backgroundColor: const Color(0xFFFFF9F0),
         title: const Text('删除对话'),
         content: Text('确定要删除 "${session.title}" 吗？'),
         actions: [
@@ -750,6 +772,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   .toList();
               final storage = ref.read(storageServiceProvider);
               await storage.deleteSession(session.id);
+              // 如果是悬浮窗保存的记录，同时从 Kotlin SharedPreferences 删除
+              if (session.id.startsWith('chat_')) {
+                try {
+                  const channel = MethodChannel('com.yl.aigg/bridge');
+                  await channel.invokeMethod('deleteOverlayChat', {'sessionId': session.id});
+                } catch (_) {}
+              }
               Navigator.pop(context);
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
@@ -780,34 +809,36 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 }
 
 /// 对话会话详情页面
-class ChatSessionDetailPage extends StatelessWidget {
+class ChatSessionDetailPage extends StatefulWidget {
   final ChatSession session;
 
   const ChatSessionDetailPage({super.key, required this.session});
 
   @override
+  State<ChatSessionDetailPage> createState() => _ChatSessionDetailPageState();
+}
+
+class _ChatSessionDetailPageState extends State<ChatSessionDetailPage> {
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(session.title),
+        title: Text(widget.session.title),
         actions: [
-          // 导出单条
           IconButton(
             icon: const Icon(Icons.file_download),
             tooltip: '导出为 Markdown',
             onPressed: () async {
               try {
                 final buffer = StringBuffer();
-                buffer.writeln('# ${session.title}');
+                buffer.writeln('# ${widget.session.title}');
                 buffer.writeln();
-                buffer.writeln(
-                  '> 创建时间: ${session.createdAt.toString().substring(0, 19)}',
-                );
-                buffer.writeln('> ${session.summary}');
+                buffer.writeln('> 创建时间: ${widget.session.createdAt.toString().substring(0, 19)}');
+                buffer.writeln('> ${widget.session.summary}');
                 buffer.writeln();
                 buffer.writeln('---');
                 buffer.writeln();
-                for (final msg in session.messages) {
+                for (final msg in widget.session.messages) {
                   buffer.writeln('## ${msg.isUser ? "👤 用户" : "🤖 GG-AI"}');
                   buffer.writeln();
                   buffer.writeln(msg.content);
@@ -815,54 +846,39 @@ class ChatSessionDetailPage extends StatelessWidget {
                   buffer.writeln('---');
                   buffer.writeln();
                 }
-                buffer.writeln(
-                  '*导出时间: ${DateTime.now().toString().substring(0, 19)}*',
-                );
+                buffer.writeln('*导出时间: ${DateTime.now().toString().substring(0, 19)}*');
 
-                final safeTitle = session.title.replaceAll(
-                  RegExp(r'[^\w\u4e00-\u9fa5]'),
-                  '_',
-                );
+                final safeTitle = widget.session.title.replaceAll(RegExp(r'[^\w\u4e00-\u9fa5]'), '_');
                 final timestamp = DateTime.now().millisecondsSinceEpoch;
                 final fileName = '${safeTitle}_$timestamp.md';
 
                 const channel = MethodChannel('com.yl.aigg/bridge');
-                final filePath = await channel.invokeMethod(
-                  'exportChatToFile',
-                  {'fileName': fileName, 'content': buffer.toString()},
-                );
+                final filePath = await channel.invokeMethod('exportChatToFile', {'fileName': fileName, 'content': buffer.toString()});
 
                 if (context.mounted) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text('✅ 已导出到: $filePath')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('✅ 已导出到: $filePath')));
                 }
               } catch (e) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text('❌ 导出失败: $e')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ 导出失败: $e')));
                 }
               }
             },
           ),
-          // 复制到剪贴板
           IconButton(
             icon: const Icon(Icons.copy),
             tooltip: '复制到剪贴板',
             onPressed: () {
               final exportText =
-                  '=== ${session.title} ===\n'
-                  '时间: ${session.createdAt.toString().substring(0, 19)}\n\n'
-                  '${session.messages.map((msg) {
+                  '=== ${widget.session.title} ===\n'
+                  '时间: ${widget.session.createdAt.toString().substring(0, 19)}\n\n'
+                  '${widget.session.messages.map((msg) {
                     final role = msg.isUser ? '用户' : 'AI助手';
                     return '$role: ${msg.content}';
                   }).join('\n\n')}';
 
               Clipboard.setData(ClipboardData(text: exportText));
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('✅ 对话已复制到剪贴板')));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ 对话已复制到剪贴板')));
             },
           ),
         ],
@@ -873,165 +889,24 @@ class ChatSessionDetailPage extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
-            color: const Color(0xFF2A2A2A),
+            color: const Color(0xFFFFF9F0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  session.summary,
-                  style: const TextStyle(color: Colors.grey),
-                ),
+                Text(widget.session.summary, style: const TextStyle(color: Color(0xFFA1887F))),
                 const SizedBox(height: 4),
-                Text(
-                  '创建时间: ${session.createdAt.toString().substring(0, 19)}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
-                ),
+                Text('创建时间: ${widget.session.createdAt.toString().substring(0, 19)}', style: const TextStyle(color: Color(0xFFA1887F), fontSize: 12)),
               ],
             ),
           ),
-          // 消息列表
+          // 单 WebView 渲染所有消息
           Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: session.messages.length,
-              itemBuilder: (context, index) {
-                return _buildMessageBubble(context, session.messages[index]);
-              },
+            child: MarkdownWebView(
+              messages: widget.session.messages,
+              maxWidth: MediaQuery.of(context).size.width,
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildMessageBubble(BuildContext context, ChatMessage message) {
-    final isUser = message.isUser;
-
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.8,
-        ),
-        child: Column(
-          crossAxisAlignment: isUser
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!isUser) ...[
-                    const Icon(
-                      Icons.smart_toy,
-                      size: 16,
-                      color: Color(0xFF6C63FF),
-                    ),
-                    const SizedBox(width: 4),
-                    const Text(
-                      'GG-AI',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF6C63FF)),
-                    ),
-                  ],
-                  if (isUser) ...[
-                    const Text(
-                      '我',
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.person, size: 16, color: Colors.grey),
-                  ],
-                  const SizedBox(width: 8),
-                  Text(
-                    message.timestamp.toString().substring(11, 16),
-                    style: const TextStyle(fontSize: 10, color: Colors.grey),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isUser
-                    ? const Color(0xFF6C63FF).withOpacity(0.2)
-                    : const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isUser
-                      ? const Color(0xFF6C63FF).withOpacity(0.3)
-                      : const Color(0xFF3A3A3A),
-                ),
-              ),
-              child: isUser
-                  ? SelectableText(
-                      message.content,
-                      style: const TextStyle(height: 1.5),
-                    )
-                  : MarkdownBody(
-                      data: message.content,
-                      selectable: true,
-                      styleSheet: MarkdownStyleSheet(
-                        p: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          height: 1.5,
-                        ),
-                        code: const TextStyle(
-                          backgroundColor: Color(0xFF1A1A2E),
-                          color: Color(0xFF03DAC6),
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                        ),
-                        codeblockDecoration: BoxDecoration(
-                          color: const Color(0xFF121212),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFF3A3A3A)),
-                        ),
-                        codeblockPadding: const EdgeInsets.all(12),
-                        h1: const TextStyle(
-                          color: Color(0xFFBB86FC),
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        h2: const TextStyle(
-                          color: Color(0xFFBB86FC),
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        h3: const TextStyle(
-                          color: Color(0xFFBB86FC),
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        blockquote: const TextStyle(color: Colors.grey),
-                        listBullet: const TextStyle(color: Color(0xFF6C63FF)),
-                        a: const TextStyle(color: Color(0xFF6C63FF)),
-                        strong: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        em: const TextStyle(color: Colors.grey),
-                        tableHead: const TextStyle(
-                          color: Color(0xFFBB86FC),
-                          fontWeight: FontWeight.bold,
-                        ),
-                        tableBody: const TextStyle(color: Colors.white),
-                        tableBorder: TableBorder.all(
-                          color: const Color(0xFF3A3A3A),
-                        ),
-                        horizontalRuleDecoration: BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: Colors.grey[700]!),
-                          ),
-                        ),
-                      ),
-                    ),
-            ),
-          ],
-        ),
       ),
     );
   }

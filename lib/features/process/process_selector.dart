@@ -179,7 +179,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
           if (attachedProcess != null)
             Container(
               padding: const EdgeInsets.all(12),
-              color: const Color(0xFF2A2A2A),
+              color: const Color(0xFFFFF9F0),
               child: Row(
                 children: [
                   const Icon(Icons.check_circle, color: Colors.green, size: 20),
@@ -196,7 +196,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                           '${attachedProcess.packageName} (PID: ${attachedProcess.pid})',
                           style: const TextStyle(
                             fontSize: 12,
-                            color: Colors.grey,
+                            color: Color(0xFFA1887F),
                           ),
                         ),
                       ],
@@ -255,7 +255,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
               children: [
                 Text(
                   '找到 ${filteredProcesses.length} 个应用进程',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  style: const TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                 ),
                 const Spacer(),
                 if (_isLoading)
@@ -278,7 +278,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                       children: [
                         CircularProgressIndicator(),
                         SizedBox(height: 16),
-                        Text('正在扫描进程...', style: TextStyle(color: Colors.grey)),
+                        Text('正在扫描进程...', style: TextStyle(color: Color(0xFFA1887F))),
                       ],
                     ),
                   )
@@ -287,13 +287,13 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.apps, size: 64, color: Colors.grey),
+                        Icon(Icons.apps, size: 64, color: Color(0xFFA1887F)),
                         SizedBox(height: 16),
-                        Text('未找到应用进程', style: TextStyle(color: Colors.grey)),
+                        Text('未找到应用进程', style: TextStyle(color: Color(0xFFA1887F))),
                         SizedBox(height: 8),
                         Text(
                           '请确保已打开游戏应用',
-                          style: TextStyle(color: Colors.grey, fontSize: 12),
+                          style: TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                         ),
                       ],
                     ),
@@ -309,7 +309,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                           isAttached ? Icons.check_circle : Icons.apps,
                           color: isAttached
                               ? Colors.green
-                              : const Color(0xFF6C63FF),
+                              : const Color(0xFF8D6E63),
                         ),
                         title: Text(
                           process.displayName,
@@ -324,7 +324,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                           '${process.packageName}  |  PID: ${process.pid}',
                           style: const TextStyle(
                             fontSize: 11,
-                            color: Colors.grey,
+                            color: Color(0xFFA1887F),
                           ),
                         ),
                         trailing: isAttached
@@ -333,7 +333,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                                   '已附加',
                                   style: TextStyle(
                                     fontSize: 10,
-                                    color: Colors.white,
+                                    color: Color(0xFF3E2723),
                                   ),
                                 ),
                                 backgroundColor: Colors.green,

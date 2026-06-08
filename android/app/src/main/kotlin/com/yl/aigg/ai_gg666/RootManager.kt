@@ -132,4 +132,95 @@ object RootManager {
         closeSuShell()
         hasRootAccess = null
     }
+
+    /**
+     * 通过 Root Shell 批量读取多个内存块（优化版）
+     * 一次 su 调用读取多个地址
+     */
+    fun batchReadMemoryViaRoot(pid: Int, requests: List<Pair<Long, Int>>): List<ByteArray?> {
+        if (requests.isEmpty()) return emptyList()
+        
+        try {
+            // 构建批量读取命令
+            val commands = requests.mapIndexed { index, (address, size) ->
+                "dd if=/proc/$pid/mem bs=1 skip=$address count=$size 2>/dev/null | xxd -p > /data/local/tmp/mem_$index.hex"
+            }
+            
+            // 一次性执行所有命令
+            val batchCmd = commands.joinToString(" && ")
+            executeRootCommand(batchCmd)
+            
+            // 读取所有结果
+            return requests.indices.map { index ->
+                val hexResult = executeRootCommand("cat /data/local/tmp/mem_$index.hex 2>/dev/null")
+                if (hexResult.isNullOrEmpty()) {
+                    null
+                } else {
+                    val hexClean = hexResult.replace("\\s".toRegex(), "")
+                    val bytes = ByteArray(hexClean.length / 2)
+                    for (i in bytes.indices) {
+                        val hex = hexClean.substring(i * 2, i * 2 + 2)
+                        bytes[i] = hex.toInt(16).toByte()
+                    }
+                    bytes
+                }
+            }.also {
+                // 清理临时文件
+                executeRootCommand("rm -f /data/local/tmp/mem_*.hex 2>/dev/null")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("RootManager", "batchReadMemoryViaRoot failed: ${e.message}")
+            return List(requests.size) { null }
+        }
+    }
+
+    /**
+     * 通过 Root Shell 读取内存（优化版：直接读取，不经过临时文件）
+     * 返回二进制数据
+     */
+    fun readMemoryViaRoot(pid: Int, address: Long, size: Int): ByteArray? {
+        try {
+            // 使用 xxd 读取并转为十六进制
+            val cmd = "dd if=/proc/$pid/mem bs=1 skip=$address count=$size 2>/dev/null | xxd -p"
+            val hexResult = executeRootCommand(cmd) ?: return null
+            
+            if (hexResult.isEmpty()) return null
+            
+            // 移除所有空白字符
+            val hexClean = hexResult.replace("\\s".toRegex(), "")
+            
+            if (hexClean.isEmpty()) return null
+            
+            // 将十六进制字符串转为字节数组
+            val bytes = ByteArray(hexClean.length / 2)
+            for (i in bytes.indices) {
+                val hex = hexClean.substring(i * 2, i * 2 + 2)
+                bytes[i] = hex.toInt(16).toByte()
+            }
+            
+            return bytes
+        } catch (e: Exception) {
+            android.util.Log.e("RootManager", "readMemoryViaRoot failed: ${e.message}")
+            return null
+        }
+    }
+
+    /**
+     * 通过 Root Shell 写入内存（优化版：使用 xxd）
+     */
+    fun writeMemoryViaRoot(pid: Int, address: Long, data: ByteArray): Boolean {
+        try {
+            // 将字节数组转为十六进制字符串
+            val hexString = data.joinToString("") { "%02x".format(it) }
+            
+            // 通过 xxd 解码并写入
+            val cmd = "echo '$hexString' | xxd -r -p | dd of=/proc/$pid/mem bs=1 seek=$address count=${data.size} 2>/dev/null"
+            val result = executeRootCommand(cmd)
+            
+            return result != null
+        } catch (e: Exception) {
+            android.util.Log.e("RootManager", "writeMemoryViaRoot failed: ${e.message}")
+            return false
+        }
+    }
 }

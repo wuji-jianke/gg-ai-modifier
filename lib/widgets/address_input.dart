@@ -79,7 +79,7 @@ class _AddressInputState extends State<AddressInput> {
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(
               widget.label!,
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
+              style: const TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
             ),
           ),
         Row(
@@ -87,7 +87,7 @@ class _AddressInputState extends State<AddressInput> {
             // 十六进制/十进制切换
             Container(
               decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
+                color: const Color(0xFFFFF9F0),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
@@ -143,7 +143,7 @@ class _AddressInputState extends State<AddressInput> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF6C63FF) : Colors.transparent,
+          color: isSelected ? const Color(0xFF8D6E63) : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Text(
@@ -151,7 +151,7 @@ class _AddressInputState extends State<AddressInput> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.bold,
-            color: isSelected ? Colors.white : Colors.grey,
+            color: isSelected ? Color(0xFF3E2723) : Color(0xFFA1887F),
           ),
         ),
       ),

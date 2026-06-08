@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../chat/chat_page.dart';
-import '../search/search_page.dart';
+import '../plugin/plugin_center_page.dart';
 import '../script/script_page.dart';
 import '../settings/settings_page.dart';
 import '../process/process_selector.dart';
@@ -107,7 +107,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         index: currentIndex,
         children: const [
           ChatPage(),
-          SearchPage(),
+          const PluginCenterPage(),
           ScriptPage(),
           SettingsPage(),
         ],
@@ -117,27 +117,27 @@ class _HomePageState extends ConsumerState<HomePage> {
         onDestinationSelected: (index) {
           ref.read(currentPageProvider.notifier).state = index;
         },
-        backgroundColor: const Color(0xFF1E1E1E),
-        indicatorColor: const Color(0xFF6C63FF).withValues(alpha: 0.3),
+        backgroundColor: const Color(0xFFFDFBF7),
+        indicatorColor: const Color(0xFF8D6E63).withValues(alpha: 0.2),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history, color: Color(0xFF6C63FF)),
+            selectedIcon: Icon(Icons.history, color: Color(0xFF8D6E63)),
             label: '对话记录',
           ),
           NavigationDestination(
-            icon: Icon(Icons.search),
-            selectedIcon: Icon(Icons.search, color: Color(0xFF6C63FF)),
-            label: '内存搜索',
+            icon: Icon(Icons.extension),
+            selectedIcon: Icon(Icons.extension, color: Color(0xFF8D6E63)),
+            label: '插件中心',
           ),
           NavigationDestination(
             icon: Icon(Icons.code),
-            selectedIcon: Icon(Icons.code, color: Color(0xFF6C63FF)),
+            selectedIcon: Icon(Icons.code, color: Color(0xFF8D6E63)),
             label: '脚本库',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings),
-            selectedIcon: Icon(Icons.settings, color: Color(0xFF6C63FF)),
+            selectedIcon: Icon(Icons.settings, color: Color(0xFF8D6E63)),
             label: '设置',
           ),
         ],

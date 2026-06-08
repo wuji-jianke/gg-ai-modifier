@@ -15,11 +15,23 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
+    companion object {
+        lateinit var appContext: android.content.Context
+    }
+
     private lateinit var channel: MethodChannel
     private val OVERLAY_PERMISSION_REQUEST = 1234
     private val STORAGE_PERMISSION_REQUEST = 1235
     private val ALL_PERMISSIONS_REQUEST = 1236
     private var pendingPage: String? = null
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        appContext = applicationContext
+        
+        // 初始化 MemoryEngine 的 Context
+        MemoryEngine.setContext(applicationContext)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -67,19 +79,24 @@ class MainActivity : FlutterActivity() {
                         result.error("INVALID_PID", "PID is required", null)
                         return@setMethodCallHandler
                     }
-                    try {
-                        result.success(MemoryEngine.attachProcess(pid))
-                    } catch (e: Exception) {
-                        result.error("ATTACH_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val success = MemoryEngine.attachProcess(pid)
+                            runOnUiThread { result.success(success) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("ATTACH_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "detachProcess" -> {
-                    try {
-                        MemoryEngine.detachProcess()
-                        result.success(true)
-                    } catch (e: Exception) {
-                        result.error("DETACH_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            MemoryEngine.detachProcess()
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("DETACH_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "getAttachedPid" -> {
                     // 优先从 SharedPreferences 读取（悬浮窗可能已附加）
@@ -100,7 +117,7 @@ class MainActivity : FlutterActivity() {
                     result.success(MemoryEngine.getAttachedPid())
                 }
 
-                // 内存搜索
+                // 内存搜索（全部在后台线程执行）
                 "searchExact" -> {
                     val value = call.argument<Any>("value")
                     if (value == null) {
@@ -108,25 +125,31 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val type = call.argument<String>("type") ?: "dword"
-                    try {
-                        result.success(MemoryEngine.searchExact(value, type))
-                    } catch (e: Exception) {
-                        result.error("SEARCH_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val results = MemoryEngine.searchExact(value, type)
+                            runOnUiThread { result.success(results) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SEARCH_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "filterResults" -> {
-                    val prevAddresses = call.argument<List<Int>>("previousAddresses") ?: emptyList()
+                    val prevAddresses = (call.argument<List<Int>>("previousAddresses") ?: emptyList()).map { it.toLong() }
                     val value = call.argument<Any>("value")
                     if (value == null) {
                         result.error("INVALID_VALUE", "Value is required", null)
                         return@setMethodCallHandler
                     }
                     val type = call.argument<String>("type") ?: "dword"
-                    try {
-                        result.success(MemoryEngine.filterResults(prevAddresses, value, type))
-                    } catch (e: Exception) {
-                        result.error("FILTER_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val results = MemoryEngine.filterResults(prevAddresses, value, type)
+                            runOnUiThread { result.success(results) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("FILTER_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "searchByRange" -> {
                     val minValue = call.argument<Number>("minValue")
@@ -136,11 +159,14 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val type = call.argument<String>("type") ?: "dword"
-                    try {
-                        result.success(MemoryEngine.searchByRange(minValue.toLong(), maxValue.toLong(), type))
-                    } catch (e: Exception) {
-                        result.error("RANGE_SEARCH_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val results = MemoryEngine.searchByRange(minValue.toLong(), maxValue.toLong(), type)
+                            runOnUiThread { result.success(results) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("RANGE_SEARCH_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
 
                 // 模糊搜索（未知值搜索）
@@ -187,7 +213,7 @@ class MainActivity : FlutterActivity() {
                     }.start()
                 }
 
-                // 内存读写
+                // 内存读写（全部在后台线程执行）
                 "readMemory" -> {
                     val address = call.argument<Int>("address")
                     if (address == null) {
@@ -195,11 +221,14 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val type = call.argument<String>("type") ?: "dword"
-                    try {
-                        result.success(MemoryEngine.readMemory(address, type))
-                    } catch (e: Exception) {
-                        result.error("READ_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val value = MemoryEngine.readMemory(address, type)
+                            runOnUiThread { result.success(value) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("READ_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "writeMemory" -> {
                     val address = call.argument<Int>("address")
@@ -209,19 +238,25 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val type = call.argument<String>("type") ?: "dword"
-                    try {
-                        result.success(MemoryEngine.writeMemory(address, value, type))
-                    } catch (e: Exception) {
-                        result.error("WRITE_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val success = MemoryEngine.writeMemory(address, value, type)
+                            runOnUiThread { result.success(success) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("WRITE_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "writeBatch" -> {
                     val requests = call.argument<List<Map<String, Any>>>("requests") ?: emptyList()
-                    try {
-                        result.success(MemoryEngine.writeBatch(requests))
-                    } catch (e: Exception) {
-                        result.error("BATCH_WRITE_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val success = MemoryEngine.writeBatch(requests)
+                            runOnUiThread { result.success(success) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("BATCH_WRITE_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
 
                 // 内存冻结
@@ -259,13 +294,16 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // 内存区域
+                // 内存区域（后台线程执行）
                 "getMemoryRegions" -> {
-                    try {
-                        result.success(MemoryEngine.getMemoryRegions())
-                    } catch (e: Exception) {
-                        result.error("REGIONS_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val regions = MemoryEngine.getMemoryRegions()
+                            runOnUiThread { result.success(regions) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("REGIONS_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
                 "analyzeMemoryRegion" -> {
                     val address = call.argument<Int>("address")
@@ -274,11 +312,14 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     val range = call.argument<Int>("range") ?: 256
-                    try {
-                        result.success(MemoryEngine.analyzeMemoryRegion(address, range))
-                    } catch (e: Exception) {
-                        result.error("ANALYZE_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val analysis = MemoryEngine.analyzeMemoryRegion(address, range)
+                            runOnUiThread { result.success(analysis) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("ANALYZE_ERROR", e.message, null) }
+                        }
+                    }.start()
                 }
 
                 // Root 权限
@@ -295,6 +336,11 @@ class MainActivity : FlutterActivity() {
                     } catch (e: Exception) {
                         result.error("ROOT_REQUEST_ERROR", e.message, null)
                     }
+                }
+
+                // Native 库状态检查
+                "checkNativeStatus" -> {
+                    result.success(MemoryEngine.isNativeAvailable())
                 }
 
                 // 悬浮窗
@@ -346,6 +392,20 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     } catch (e: Exception) {
                         result.error("CLEAR_ERROR", e.message, null)
+                    }
+                }
+
+                // 删除单条悬浮窗聊天记录
+                "deleteOverlayChat" -> {
+                    try {
+                        val sessionId = call.argument<String>("sessionId") ?: ""
+                        if (sessionId.isNotEmpty()) {
+                            val prefs = getSharedPreferences("gg_overlay_chat", Context.MODE_PRIVATE)
+                            prefs.edit().remove(sessionId).apply()
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("DELETE_ERROR", e.message, null)
                     }
                 }
 
@@ -408,13 +468,17 @@ class MainActivity : FlutterActivity() {
                             if (key.startsWith("chat_") && value is String) {
                                 try {
                                     val jsonArray = org.json.JSONArray(value)
-                                    val messages = mutableListOf<Map<String, String>>()
+                                    val messages = mutableListOf<Map<String, Any>>()
                                     for (i in 0 until jsonArray.length()) {
                                         val obj = jsonArray.getJSONObject(i)
-                                        messages.add(mapOf(
+                                        val msgMap = mutableMapOf<String, Any>(
                                             "sender" to obj.getString("sender"),
                                             "message" to obj.getString("message")
-                                        ))
+                                        )
+                                        if (obj.has("timestamp")) {
+                                            msgMap["timestamp"] = obj.getLong("timestamp")
+                                        }
+                                        messages.add(msgMap)
                                     }
                                     chatList.add(mapOf(
                                         "id" to key,
