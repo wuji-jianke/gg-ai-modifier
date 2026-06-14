@@ -20,17 +20,6 @@ on:
           - android-arm64
           - android-arm
           - android-arm,android-arm64
-  push:
-    branches:
-      - master
-    paths:
-      - .github/workflows/android.yml
-      - android/**
-      - assets/**
-      - lib/**
-      - lua/**
-      - pubspec.yaml
-      - pubspec.lock
 
 permissions:
   contents: read
