@@ -46,6 +46,7 @@ jobs:
       TARGET_PLATFORM: ${{ github.event.inputs.target_platform || 'android-arm64' }}
       ANDROID_NDK_VERSION: 28.2.13676358
       CMAKE_VERSION: 3.22.1
+      CMDLINE_TOOLS_ZIP: commandlinetools-linux-11076708_latest.zip
 
     steps:
       - name: Checkout
@@ -68,16 +69,17 @@ jobs:
         run: |
           set -euo pipefail
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest" /tmp/cmdline-tools /tmp/cmdline-tools.zip
           mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-            unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools
-            mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          fi
+          curl -fsSL -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/${CMDLINE_TOOLS_ZIP}"
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools
+          mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          sdkmanager --version
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --version
 
       - name: Show tool versions
         run: |
@@ -94,12 +96,16 @@ jobs:
           sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install \
             "platform-tools" \
             "platforms;android-34" \
+            "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;${ANDROID_NDK_VERSION}" \
             "cmake;${CMAKE_VERSION}"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
-          echo "ndk.dir=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> android/local.properties
+          printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=debug\nflutter.versionName=3.0.0\nflutter.versionCode=3\nndk.dir=%s\n' \
+            "$ANDROID_SDK_ROOT" \
+            "$FLUTTER_ROOT" \
+            "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" > android/local.properties
 
       - name: Flutter pub get
         run: flutter pub get
