@@ -724,12 +724,12 @@ class OverlayService : Service() {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 addView(TextView(this@OverlayService).apply {
-                    text = "显示系统进程"
+                    text = "显示系统/预装应用"
                     setTextColor(overlayTextPrimary)
                     textSize = 12f
                 })
                 addView(TextView(this@OverlayService).apply {
-                    text = "默认只显示普通应用进程"
+                    text = "默认只显示用户安装的第三方应用"
                     setTextColor(overlayTextSecondary)
                     textSize = 10f
                     setPadding(0, dp(2), 0, 0)
@@ -768,7 +768,7 @@ class OverlayService : Service() {
                 includeSystem = overlayShowSystemProcesses
             )
             handler.post {
-                status.text = "找到 ${procs.size} 个" + if (overlayShowSystemProcesses) "进程" else "应用"
+                status.text = "找到 ${procs.size} 个" + if (overlayShowSystemProcesses) "进程" else "第三方应用"
                 for (proc in procs) {
                     val name = proc["processName"] as String; val pkg = proc["packageName"] as String; val pid = proc["pid"] as Int
                     val icon = ProcessManager.getAppIconDrawable(this@OverlayService, pkg)
@@ -797,7 +797,7 @@ class OverlayService : Service() {
                         })
                         if ((proc["isSystem"] as? Boolean) == true) {
                             addView(TextView(this@OverlayService).apply {
-                                text = "系统进程"
+                                text = if ((proc["isPreinstalled"] as? Boolean) == true) "预装/系统应用" else "系统进程"
                                 setTextColor(overlayWarning)
                                 textSize = 10f
                                 setPadding(0, dp(4), 0, 0)

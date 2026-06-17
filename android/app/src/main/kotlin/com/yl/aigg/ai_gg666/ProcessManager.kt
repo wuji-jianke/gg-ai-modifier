@@ -1,41 +1,51 @@
 package com.yl.aigg.ai_gg666
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
 import java.io.File
 import java.io.FileOutputStream
 
 /**
  * 进程管理器
- * 使用 pm list packages 快速获取已安装应用，再查找对应 PID
- * 类似 GG 修改器的方式，瞬间出结果
+ * 默认只返回用户安装的第三方应用进程；启用 includeSystem 后再放开系统/预装应用。
  */
 object ProcessManager {
 
-    private var appInfoCache: Map<String, ApplicationInfo> = emptyMap()
-    private val iconPathCache = mutableMapOf<String, String?>()
+    private data class AppMeta(
+        val appInfo: ApplicationInfo?,
+        val appName: String,
+        val isSystem: Boolean,
+        val isPreinstalled: Boolean,
+        val hasLauncherEntry: Boolean
+    ) {
+        val isThirdPartyUserApp: Boolean
+            get() = appInfo != null && !isSystem && !isPreinstalled && hasLauncherEntry
+    }
 
-    /**
-     * 获取运行中的应用进程列表
-     * 使用 pm + ps 快速获取，避免遍历 /proc
-     */
+    private var appInfoCache: Map<String, ApplicationInfo> = emptyMap()
+    private val appMetaCache = mutableMapOf<String, AppMeta>()
+    private val iconPathCache = mutableMapOf<String, String?>()
+    private var launcherPackageCache: Set<String> = emptySet()
+
     fun getProcessList(
         context: android.content.Context,
-        includeSystem: Boolean = true
+        includeSystem: Boolean = false
     ): List<Map<String, Any>> {
         val processes = mutableListOf<Map<String, Any>>()
 
         try {
-            // 获取已安装的第三方应用信息（用于显示APP名称）
             val pm = context.packageManager
             val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
             appInfoCache = installedApps.associateBy { it.packageName }
+            appMetaCache.clear()
+            launcherPackageCache = queryLauncherPackages(pm)
 
-            // 使用 ps 命令快速获取运行中的进程
             val psResult = RootManager.executeRootCommand("ps -A -o PID,NAME")
             if (psResult != null) {
                 for (line in psResult.lines()) {
@@ -44,32 +54,19 @@ object ProcessManager {
                     if (parts.size < 2) continue
 
                     val pid = parts[0].toIntOrNull() ?: continue
-                    val packageName = parts[1].trim()
+                    val processName = parts[1].trim()
+                    if (processName.isEmpty() || !processName.contains(".")) continue
 
-                    if (packageName.isEmpty() || !packageName.contains(".")) continue
-
-                    val appPackage = normalizePackageName(packageName)
-
-                    // 获取 APP 名称
-                    val appName = getAppName(pm, appPackage)
-                    val isSystem = isSystemApp(appPackage)
-                    if (!includeSystem && isSystem) continue
-                    val iconPath = getAppIconPath(context, pm, appPackage)
-
-                    processes.add(
-                        mapOf(
-                            "pid" to pid,
-                            "packageName" to packageName,
-                            "processName" to appName,
-                            "uid" to 0,
-                            "isSystem" to isSystem,
-                            "iconPath" to (iconPath ?: "")
-                        )
-                    )
+                    buildProcessEntry(
+                        context = context,
+                        pm = pm,
+                        pid = pid,
+                        rawProcessName = processName,
+                        includeSystem = includeSystem
+                    )?.let(processes::add)
                 }
             }
 
-            // 如果 ps 命令失败，尝试备用方案
             if (processes.isEmpty()) {
                 return getProcessListFallback(context, includeSystem)
             }
@@ -77,34 +74,25 @@ object ProcessManager {
             return getProcessListFallback(context, includeSystem)
         }
 
-        return processes
-            .distinctBy { "${it["packageName"]}_${it["pid"]}" }
-            .sortedWith(compareBy<Map<String, Any>> {
-                val name = it["processName"] as String
-                // 中文名称排前面
-                if (name.isNotEmpty() && name[0].code > 127) 0 else 1
-            }.thenBy { it["processName"] as String })
+        return sortProcesses(processes)
     }
 
-    /**
-     * 备用方案：使用 pm list packages + cat /proc/pid/cmdline
-     */
     private fun getProcessListFallback(
         context: android.content.Context,
-        includeSystem: Boolean = true
+        includeSystem: Boolean = false
     ): List<Map<String, Any>> {
         val processes = mutableListOf<Map<String, Any>>()
 
         try {
             val pm = context.packageManager
+            launcherPackageCache = queryLauncherPackages(pm)
 
-            // 获取所有运行中的进程 PID 和包名
             val procResult = RootManager.executeRootCommand(
                 "for pid in /proc/[0-9]*; do " +
-                "p=\${pid##*/}; " +
-                "c=\$(cat /proc/\$p/cmdline 2>/dev/null | tr '\\0' ' ' | sed 's/ *$//'); " +
-                "[ -n \"\$c\" ] && echo \"\$p|\$c\"; " +
-                "done"
+                    "p=\${pid##*/}; " +
+                    "c=\$(cat /proc/\$p/cmdline 2>/dev/null | tr '\\0' ' ' | sed 's/ *$//'); " +
+                    "[ -n \"\$c\" ] && echo \"\$p|\$c\"; " +
+                    "done"
             )
 
             if (procResult != null) {
@@ -114,41 +102,78 @@ object ProcessManager {
                     if (parts.size < 2) continue
 
                     val pid = parts[0].trim().toIntOrNull() ?: continue
-                    val packageName = parts[1].trim()
+                    val processName = parts[1].trim()
+                    if (processName.isEmpty() || !processName.contains(".")) continue
 
-                    if (packageName.isEmpty()) continue
-
-                    val appPackage = normalizePackageName(packageName)
-                    val appName = getAppName(pm, appPackage)
-                    val isSystem = isSystemApp(appPackage)
-                    if (!includeSystem && isSystem) continue
-                    val iconPath = getAppIconPath(context, pm, appPackage)
-
-                    processes.add(
-                        mapOf(
-                            "pid" to pid,
-                            "packageName" to packageName,
-                            "processName" to appName,
-                            "uid" to 0,
-                            "isSystem" to isSystem,
-                            "iconPath" to (iconPath ?: "")
-                        )
-                    )
+                    buildProcessEntry(
+                        context = context,
+                        pm = pm,
+                        pid = pid,
+                        rawProcessName = processName,
+                        includeSystem = includeSystem
+                    )?.let(processes::add)
                 }
             }
-        } catch (e: Exception) {}
+        } catch (_: Exception) {
+        }
 
-        return processes
-            .distinctBy { "${it["packageName"]}_${it["pid"]}" }
-            .sortedWith(compareBy<Map<String, Any>> {
-                val name = it["processName"] as String
-                if (name.isNotEmpty() && name[0].code > 127) 0 else 1
-            }.thenBy { it["processName"] as String })
+        return sortProcesses(processes)
     }
 
-    /**
-     * 获取 APP 显示名称
-     */
+    private fun buildProcessEntry(
+        context: android.content.Context,
+        pm: PackageManager,
+        pid: Int,
+        rawProcessName: String,
+        includeSystem: Boolean
+    ): Map<String, Any>? {
+        val appPackage = normalizePackageName(rawProcessName)
+        val meta = getAppMeta(pm, appPackage)
+        val isMainProcess = rawProcessName == appPackage
+
+        if (!includeSystem && (meta == null || !meta.isThirdPartyUserApp)) {
+            return null
+        }
+        if (!includeSystem && !isMainProcess) {
+            return null
+        }
+
+        val displayName = meta?.appName?.takeIf { it.isNotBlank() } ?: appPackage
+        val iconPath = getAppIconPath(context, pm, appPackage)
+        val isSystemLike = meta?.isSystem == true || meta?.isPreinstalled == true
+
+        return mapOf(
+            "pid" to pid,
+            "packageName" to rawProcessName,
+            "processName" to displayName,
+            "uid" to (meta?.appInfo?.uid ?: 0),
+            "isSystem" to isSystemLike,
+            "isPreinstalled" to (meta?.isPreinstalled ?: false),
+            "isUserApp" to (meta?.isThirdPartyUserApp ?: false),
+            "hasLauncherEntry" to (meta?.hasLauncherEntry ?: false),
+            "isMainProcess" to isMainProcess,
+            "iconPath" to (iconPath ?: "")
+        )
+    }
+
+    private fun sortProcesses(processes: List<Map<String, Any>>): List<Map<String, Any>> {
+        return processes
+            .distinctBy { "${it["packageName"]}_${it["pid"]}" }
+            .sortedWith(
+                compareBy<Map<String, Any>>(
+                    { !(it["isUserApp"] as? Boolean ?: false) },
+                    { !(it["isMainProcess"] as? Boolean ?: false) },
+                    {
+                        val name = (it["processName"] as? String).orEmpty()
+                        if (name.isNotEmpty() && name[0].code > 127) 0 else 1
+                    },
+                    { (it["processName"] as? String).orEmpty().lowercase() },
+                    { (it["packageName"] as? String).orEmpty().lowercase() },
+                    { (it["pid"] as? Int) ?: Int.MAX_VALUE }
+                )
+            )
+    }
+
     private fun getAppName(pm: PackageManager, packageName: String): String {
         return try {
             val appInfo = appInfoCache[packageName]
@@ -218,17 +243,53 @@ object ProcessManager {
         return packageName.substringBefore(":").trim()
     }
 
-    /**
-     * 判断是否为系统应用
-     */
-    private fun isSystemApp(packageName: String): Boolean {
-        return packageName.startsWith("com.android.") ||
-                packageName.startsWith("android.") ||
-                packageName == "system" ||
-                packageName == "zygote" ||
-                packageName == "zygote64" ||
-                packageName.startsWith("com.google.android.") ||
-                packageName == "root" ||
-                packageName == "shell"
+    private fun getAppMeta(pm: PackageManager, packageName: String): AppMeta? {
+        appMetaCache[packageName]?.let { return it }
+
+        val appInfo = appInfoCache[packageName] ?: return null
+        val flags = appInfo.flags
+        val sourceDir = appInfo.publicSourceDir ?: appInfo.sourceDir
+        val isSystem = (flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        val isUpdatedSystem = (flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        val isPreinstalled = isUpdatedSystem || isPreinstalledPath(sourceDir)
+        val hasLauncherEntry = launcherPackageCache.contains(packageName)
+
+        val meta = AppMeta(
+            appInfo = appInfo,
+            appName = getAppName(pm, packageName),
+            isSystem = isSystem,
+            isPreinstalled = isPreinstalled,
+            hasLauncherEntry = hasLauncherEntry
+        )
+        appMetaCache[packageName] = meta
+        return meta
+    }
+
+    private fun queryLauncherPackages(pm: PackageManager): Set<String> {
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val activities = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(intent, 0)
+        }
+        return activities.mapTo(mutableSetOf()) { it.activityInfo.packageName }
+    }
+
+    private fun isPreinstalledPath(path: String?): Boolean {
+        if (path.isNullOrBlank()) return false
+        val normalized = path.lowercase()
+        return normalized.startsWith("/system/") ||
+            normalized.startsWith("/product/") ||
+            normalized.startsWith("/vendor/") ||
+            normalized.startsWith("/system_ext/") ||
+            normalized.startsWith("/odm/") ||
+            normalized.startsWith("/oem/") ||
+            normalized.startsWith("/apex/") ||
+            normalized.startsWith("/mi_ext/") ||
+            normalized.startsWith("/hw_product/") ||
+            normalized.startsWith("/cust/")
     }
 }

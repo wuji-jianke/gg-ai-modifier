@@ -24,7 +24,7 @@ class ProcessSelectorPage extends ConsumerStatefulWidget {
 
 class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
   bool _isLoading = false;
-  bool _showSystemProcesses = false;
+  bool _showExtraProcesses = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
 
@@ -80,7 +80,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
     try {
       const channel = MethodChannel('com.yl.aigg/bridge');
       final result = await channel.invokeMethod('getProcessList', {
-        'includeSystem': _showSystemProcesses,
+        'includeSystem': _showExtraProcesses,
       });
 
       if (result != null && mounted) {
@@ -153,7 +153,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
     final attachedProcess = ref.watch(attachedProcessProvider);
     final processes = ref.watch(processListProvider);
     final filteredProcesses = _filteredProcesses;
-    final countLabel = _showSystemProcesses ? '个进程' : '个应用进程';
+    final countLabel = _showExtraProcesses ? '个进程' : '个第三方应用';
 
     return Scaffold(
       appBar: AppBar(
@@ -247,7 +247,10 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
               children: [
                 Text(
                   '找到 ${filteredProcesses.length} $countLabel',
-                  style: const TextStyle(color: Color(0xFFA1887F), fontSize: 12),
+                  style: const TextStyle(
+                    color: Color(0xFFA1887F),
+                    fontSize: 12,
+                  ),
                 ),
                 const Spacer(),
                 if (_isLoading)
@@ -264,17 +267,14 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
             child: SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              value: _showSystemProcesses,
-              title: const Text(
-                '显示系统进程',
-                style: TextStyle(fontSize: 13),
-              ),
+              value: _showExtraProcesses,
+              title: const Text('显示系统/预装应用', style: TextStyle(fontSize: 13)),
               subtitle: const Text(
-                '默认只展示普通应用进程',
+                '默认只展示用户安装的第三方应用',
                 style: TextStyle(fontSize: 11, color: Color(0xFFA1887F)),
               ),
               onChanged: (value) {
-                setState(() => _showSystemProcesses = value);
+                setState(() => _showExtraProcesses = value);
                 _loadProcessList();
               },
             ),
@@ -290,7 +290,10 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                       children: [
                         CircularProgressIndicator(),
                         SizedBox(height: 16),
-                        Text('正在扫描进程...', style: TextStyle(color: Color(0xFFA1887F))),
+                        Text(
+                          '正在扫描进程...',
+                          style: TextStyle(color: Color(0xFFA1887F)),
+                        ),
                       ],
                     ),
                   )
@@ -301,11 +304,17 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                       children: [
                         Icon(Icons.apps, size: 64, color: Color(0xFFA1887F)),
                         SizedBox(height: 16),
-                        Text('未找到应用进程', style: TextStyle(color: Color(0xFFA1887F))),
+                        Text(
+                          '未找到应用进程',
+                          style: TextStyle(color: Color(0xFFA1887F)),
+                        ),
                         SizedBox(height: 8),
                         Text(
                           '请确保已打开游戏应用',
-                          style: TextStyle(color: Color(0xFFA1887F), fontSize: 12),
+                          style: TextStyle(
+                            color: Color(0xFFA1887F),
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),

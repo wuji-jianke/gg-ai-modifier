@@ -887,17 +887,16 @@ object LuaEngine {
 
     private fun getProcessInfoList(filterSystemApps: Boolean): List<Map<String, Any>> {
         val ctx = context ?: return emptyList()
-        val all = ProcessManager.getProcessList(ctx)
         return if (filterSystemApps) {
-            all.filter { !(it["isSystem"] as? Boolean ?: false) }
+            ProcessManager.getProcessList(ctx, includeSystem = false)
         } else {
-            all
+            ProcessManager.getProcessList(ctx, includeSystem = true)
         }
     }
 
     private fun attachProcessByName(processName: String): Boolean {
         val ctx = context ?: return false
-        val target = ProcessManager.getProcessList(ctx).firstOrNull { item ->
+        val target = ProcessManager.getProcessList(ctx, includeSystem = true).firstOrNull { item ->
             val label = item["processName"]?.toString().orEmpty()
             val pkg = item["packageName"]?.toString().orEmpty()
             label.equals(processName, true) ||
