@@ -26,6 +26,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -73,6 +74,19 @@ class OverlayService : Service() {
     // 记住上次打开的面板
     private var lastPanel = ""
 
+    private val overlayTextPrimary = Color.parseColor("#F3F7FF")
+    private val overlayTextSecondary = Color.parseColor("#9AAFD0")
+    private val overlayTextMuted = Color.parseColor("#6B7E9D")
+    private val overlaySurface = Color.parseColor("#0A1322")
+    private val overlaySurfaceRaised = Color.parseColor("#101D31")
+    private val overlaySurfaceCard = Color.parseColor("#15253C")
+    private val overlaySurfaceCardAlt = Color.parseColor("#0F1A2D")
+    private val overlayStroke = Color.parseColor("#28486E")
+    private val overlayAccent = Color.parseColor("#57B9FF")
+    private val overlayAccentStrong = Color.parseColor("#72E1FF")
+    private val overlaySuccess = Color.parseColor("#4ADE80")
+    private val overlayWarning = Color.parseColor("#F6C45E")
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -116,15 +130,232 @@ class OverlayService : Service() {
         }
     }
 
+    private fun alphaColor(color: Int, alpha: Int): Int {
+        return Color.argb(
+            alpha.coerceIn(0, 255),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color)
+        )
+    }
+
+    private fun parseUiColor(hex: String, fallback: Int = overlayAccent): Int {
+        return try {
+            Color.parseColor(hex)
+        } catch (_: Exception) {
+            fallback
+        }
+    }
+
+    private fun panelShellDrawable(accentColor: Int): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(
+                alphaColor(accentColor, 36),
+                overlaySurfaceRaised,
+                overlaySurface
+            )
+        ).apply {
+            cornerRadius = dp(18).toFloat()
+            setStroke(dp(1), alphaColor(accentColor, 180))
+        }
+    }
+
+    private fun panelHeaderDrawable(accentColor: Int): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(
+                alphaColor(accentColor, 82),
+                overlaySurfaceRaised,
+                overlaySurfaceCardAlt
+            )
+        ).apply {
+            cornerRadii = floatArrayOf(
+                dp(18).toFloat(), dp(18).toFloat(),
+                dp(18).toFloat(), dp(18).toFloat(),
+                0f, 0f,
+                0f, 0f
+            )
+        }
+    }
+
+    private fun panelContentDrawable(): GradientDrawable {
+        return GradientDrawable().apply {
+            cornerRadii = floatArrayOf(
+                0f, 0f,
+                0f, 0f,
+                dp(18).toFloat(), dp(18).toFloat(),
+                dp(18).toFloat(), dp(18).toFloat()
+            )
+            setColor(alphaColor(overlaySurface, 244))
+        }
+    }
+
+    private fun cardDrawable(
+        accentColor: Int = overlayAccent,
+        emphasized: Boolean = false,
+        compact: Boolean = false
+    ): GradientDrawable {
+        val fill = if (emphasized) overlaySurfaceCard else overlaySurfaceCardAlt
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(alphaColor(accentColor, if (emphasized) 24 else 14), fill)
+        ).apply {
+            cornerRadius = dp(if (compact) 10 else 12).toFloat()
+            setStroke(dp(1), alphaColor(accentColor, if (emphasized) 160 else 110))
+        }
+    }
+
+    private fun filledButtonDrawable(accentColor: Int = overlayAccent, compact: Boolean = false): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(alphaColor(accentColor, 220), alphaColor(overlayAccentStrong, 205))
+        ).apply {
+            cornerRadius = dp(if (compact) 8 else 10).toFloat()
+            setStroke(dp(1), alphaColor(Color.WHITE, 70))
+        }
+    }
+
+    private fun softButtonDrawable(accentColor: Int = overlayAccent, active: Boolean = false, compact: Boolean = false): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(
+                alphaColor(accentColor, if (active) 64 else 26),
+                if (active) overlaySurfaceCard else overlaySurfaceCardAlt
+            )
+        ).apply {
+            cornerRadius = dp(if (compact) 8 else 10).toFloat()
+            setStroke(dp(1), alphaColor(accentColor, if (active) 180 else 120))
+        }
+    }
+
+    private fun inputDrawable(accentColor: Int = overlayAccent): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(alphaColor(accentColor, 18), overlaySurfaceCardAlt)
+        ).apply {
+            cornerRadius = dp(10).toFloat()
+            setStroke(dp(1), alphaColor(accentColor, 148))
+        }
+    }
+
+    private fun overlayDivider(accentColor: Int = overlayAccent): View {
+        return View(this).apply {
+            setBackgroundColor(alphaColor(accentColor, 90))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(1)
+            )
+        }
+    }
+
+    private fun styleInputField(editText: EditText, accentColor: Int = overlayAccent) {
+        editText.setTextColor(overlayTextPrimary)
+        editText.setHintTextColor(overlayTextMuted)
+        editText.background = inputDrawable(accentColor)
+        editText.setPadding(dp(10), dp(8), dp(10), dp(8))
+        editText.textSize = 13f
+    }
+
+    private fun styleSpinner(spinner: Spinner, accentColor: Int = overlayAccent) {
+        spinner.background = inputDrawable(accentColor)
+        spinner.setPadding(dp(8), dp(2), dp(8), dp(2))
+    }
+
+    private fun themedSpinnerAdapter(items: Array<String>): ArrayAdapter<String> {
+        return object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, items) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                return (super.getView(position, convertView, parent) as TextView).apply {
+                    setTextColor(overlayTextPrimary)
+                    textSize = 12f
+                }
+            }
+
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                return (super.getDropDownView(position, convertView, parent) as TextView).apply {
+                    setTextColor(overlayTextPrimary)
+                    textSize = 12f
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = cardDrawable(overlayAccent, compact = true)
+                }
+            }
+        }.apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+    }
+
+    private fun buildInfoCard(title: String, subtitle: String, accentColor: Int = overlayAccent): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardDrawable(accentColor, emphasized = true)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+            addView(TextView(this@OverlayService).apply {
+                text = title
+                setTextColor(overlayTextPrimary)
+                textSize = 13f
+            })
+            addView(TextView(this@OverlayService).apply {
+                text = subtitle
+                setTextColor(overlayTextSecondary)
+                textSize = 11f
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+    }
+
     // ==================== 悬浮球 ====================
 
     private fun createBall() {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        ballView = ImageView(this).apply {
-            setImageResource(R.drawable.xfc)
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.parseColor("#8D6E63")) }
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+        val accent = overlayAccent
+        ballView = FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(alphaColor(overlayAccentStrong, 235), alphaColor(accent, 225))
+            ).apply {
+                shape = GradientDrawable.OVAL
+                setStroke(dp(1), alphaColor(Color.WHITE, 84))
+            }
+            elevation = dp(10).toFloat()
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+
+            addView(View(this@OverlayService).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setStroke(dp(1), alphaColor(overlaySurface, 120))
+                    setColor(Color.TRANSPARENT)
+                }
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            })
+
+            addView(View(this@OverlayService).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(alphaColor(Color.WHITE, 95), Color.TRANSPARENT)
+                ).apply {
+                    shape = GradientDrawable.OVAL
+                }
+                layoutParams = FrameLayout.LayoutParams(dp(42), dp(20), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                    topMargin = dp(4)
+                }
+            })
+
+            addView(ImageView(this@OverlayService).apply {
+                setImageResource(R.drawable.xfc)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setColorFilter(overlaySurface)
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            })
         }
         
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -135,8 +366,8 @@ class OverlayService : Service() {
         }
         
         ballParams = WindowManager.LayoutParams(
-            dp(50), 
-            dp(50), 
+            dp(58),
+            dp(58),
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -279,39 +510,45 @@ class OverlayService : Service() {
     // ==================== 可拖动面板包装 ====================
 
     private fun makeDraggablePanel(title: String, contentBuilder: (LinearLayout) -> Unit, w: Int = 280, h: Int = 400, onBack: (() -> Unit)? = null, titleIcon: Int? = null, bgColor: String = "#FDFBF7") {
+        val accentColor = parseUiColor(bgColor, overlayAccent)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat(); setColor(Color.parseColor(bgColor)); setStroke(1, Color.parseColor("#8D6E63"))
-            }
+            background = panelShellDrawable(accentColor)
+            elevation = dp(12).toFloat()
         }
 
         // 可拖动标题栏
         val titleBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             minimumHeight = 0
-            setPadding(dp(5), dp(5), dp(5), dp(5))
-            setBackgroundColor(Color.parseColor(bgColor))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = panelHeaderDrawable(accentColor)
         }
         if (titleIcon != null) {
             titleBar.addView(ImageView(this).apply {
                 setImageResource(titleIcon)
-                layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(6) }
+                setColorFilter(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) }
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
             })
         }
         val titleText = TextView(this).apply {
-            text = title; setTextColor(Color.parseColor("#FFF3E0")); textSize = 13f
+            text = title
+            setTextColor(overlayTextPrimary)
+            textSize = 13f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         titleBar.addView(titleText)
 
         // 返回按钮（如果不是主菜单）
-        if (title != "🎮 GG-AI Modifier") {
+        if (title != "GG-AI Modifier") {
             titleBar.addView(TextView(this).apply {
-                text = "返回"; setTextColor(Color.parseColor("#FFF3E0")); textSize = 12f
-                background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(Color.parseColor("#D7CCC8")) }
-                setPadding(dp(5), dp(5), dp(5), dp(5))
+                text = "返回"
+                setTextColor(overlayTextPrimary)
+                textSize = 11f
+                background = softButtonDrawable(accentColor, active = true, compact = true)
+                setPadding(dp(8), dp(5), dp(8), dp(5))
                 setOnClickListener { onBack?.invoke() ?: showMainMenu() }
             })
         }
@@ -319,15 +556,14 @@ class OverlayService : Service() {
         root.addView(titleBar)
 
         // 分割线
-        root.addView(View(this).apply {
-            setBackgroundColor(Color.parseColor("#E8DDD5"))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-        })
+        root.addView(overlayDivider(accentColor))
 
         // 内容区域
         val contentArea = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            background = panelContentDrawable()
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
         contentBuilder(contentArea)
         root.addView(contentArea)
@@ -399,6 +635,7 @@ class OverlayService : Service() {
     private fun showMainMenu() {
         saveLastPanel("menu")
         makeDraggablePanel("GG-AI Modifier", { content ->
+            content.addView(buildInfoCard("悬浮控制台", "附加进程、搜索内存、调用 AI 与脚本工具", overlayAccent))
             val sv = ScrollView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
             }
@@ -412,11 +649,15 @@ class OverlayService : Service() {
             sv.addView(list); content.addView(sv)
 
             // 底部按钮
-            val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
+            val bar = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(12), dp(8), dp(12), dp(10))
+                background = cardDrawable(overlayAccent, compact = true)
+            }
             bar.addView(iconBtn(R.drawable.gb_xfc, "悬浮窗") { stopSelf() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             bar.addView(iconBtn(R.drawable.ck_gb, "菜单") { closePanel() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             content.addView(bar)
-        }, 250, 380, titleIcon = R.drawable.xfc, bgColor = "#C9A882")
+        }, 268, 410, titleIcon = R.drawable.xfc, bgColor = "#57B9FF")
     }
 
     // ==================== 进程面板 ====================
@@ -424,7 +665,7 @@ class OverlayService : Service() {
     private fun showProcessPanel() {
         saveLastPanel("process")
         makeDraggablePanel("选择游戏进程", { content ->
-            val status = TextView(this).apply { text = "正在扫描..."; setTextColor(Color.parseColor("#FFF3E0")); textSize = 12f; setPadding(dp(12), dp(8), dp(12), dp(4)) }
+            val status = TextView(this).apply { text = "正在扫描..."; setTextColor(overlayTextPrimary); textSize = 12f; setPadding(dp(12), dp(8), dp(12), dp(6)) }
             content.addView(status)
 
             val sv = ScrollView(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f) }
@@ -432,13 +673,17 @@ class OverlayService : Service() {
             sv.addView(list); content.addView(sv)
 
             // 底部按钮
-            val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(12), dp(4), dp(12), dp(8)) }
+            val bar = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(12), dp(6), dp(12), dp(10))
+                background = cardDrawable(parseUiColor("#4DD0E1"), compact = true)
+            }
             bar.addView(iconBtn(R.drawable.shuaxing) { loadProcs(list, status) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             bar.addView(iconBtn(R.drawable.ck_gb) { closePanel() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             content.addView(bar)
 
             loadProcs(list, status)
-        }, 300, 450, titleIcon = R.drawable.jingcheng, bgColor = "#723d09")
+        }, 316, 470, titleIcon = R.drawable.jingcheng, bgColor = "#4DD0E1")
     }
 
     private fun loadProcs(list: LinearLayout, status: TextView) {
@@ -455,11 +700,11 @@ class OverlayService : Service() {
                     val name = proc["processName"] as String; val pkg = proc["packageName"] as String; val pid = proc["pid"] as Int
                     val item = LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(10))
-                        background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(Color.parseColor("#8B4513")) }
+                        background = cardDrawable(parseUiColor("#4DD0E1"), emphasized = true)
                         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4) }
                     }
-                    item.addView(TextView(this).apply { text = name; setTextColor(Color.parseColor("#FFF3E0")); textSize = 14f })
-                    item.addView(TextView(this).apply { text = "$pkg | PID: $pid"; setTextColor(Color.parseColor("#A1887F")); textSize = 11f })
+                    item.addView(TextView(this).apply { text = name; setTextColor(overlayTextPrimary); textSize = 14f })
+                    item.addView(TextView(this).apply { text = "$pkg | PID: $pid"; setTextColor(overlayTextSecondary); textSize = 11f })
                     item.setOnClickListener {
                         Thread {
                             val ok = MemoryEngine.attachProcess(pid)
@@ -531,7 +776,7 @@ class OverlayService : Service() {
                 // 状态行
                 val status = TextView(this).apply {
                     text = if (pid != null) "PID:$pid" else "⚠未附加"
-                    setTextColor(if (pid != null) Color.parseColor("#66BB6A") else Color.parseColor("#FF8F00"))
+                    setTextColor(if (pid != null) overlaySuccess else overlayWarning)
                     textSize = 11f
                 }
                 leftPanel.addView(status)
@@ -539,20 +784,18 @@ class OverlayService : Service() {
                 // 类型选择
                 val types = arrayOf("dword", "float", "double", "byte", "word", "qword")
                 val typeSpinner = Spinner(this).apply {
-                    adapter = ArrayAdapter(this@OverlayService, android.R.layout.simple_spinner_dropdown_item, types)
+                    adapter = themedSpinnerAdapter(types)
                     layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 }
+                styleSpinner(typeSpinner)
                 leftPanel.addView(typeSpinner)
 
                 // 模式切换按钮
                 val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
                 fun modeBtn(label: String, mode: String): Button {
                     return Button(this).apply {
-                        text = label; textSize = 10f; setTextColor(Color.parseColor("#FFF3E0"))
-                        background = GradientDrawable().apply {
-                            cornerRadius = dp(4).toFloat()
-                            setColor(if (currentSearchMode == mode) Color.parseColor("#8D6E63") else Color.parseColor("#333333"))
-                        }
+                        text = label; textSize = 10f; setTextColor(overlayTextPrimary)
+                        background = softButtonDrawable(overlayAccent, active = currentSearchMode == mode, compact = true)
                         setPadding(dp(4), dp(2), dp(4), dp(2))
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(2) }
                         setOnClickListener { currentSearchMode = mode; showSearchPanel() }
@@ -566,10 +809,7 @@ class OverlayService : Service() {
                 leftPanel.addView(modeRow)
 
                 // 分割线
-                leftPanel.addView(View(this).apply {
-                    setBackgroundColor(Color.parseColor("#E8DDD5"))
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply { topMargin = dp(4); bottomMargin = dp(4) }
-                })
+                leftPanel.addView(overlayDivider())
 
                 // 输入区域（根据模式）
                 buildSearchInputArea(leftPanel, status, typeSpinner, null, dp(4))
@@ -586,7 +826,7 @@ class OverlayService : Service() {
                     val resultList = leftPanel.tag as? LinearLayout
                     resultList?.removeAllViews()
                     resultList?.addView(TextView(this@OverlayService).apply {
-                        text = "暂无结果"; setTextColor(Color.parseColor("#8D6E63")); textSize = 12f
+                        text = "暂无结果"; setTextColor(overlayTextMuted); textSize = 12f
                         setPadding(dp(8), dp(20), dp(8), dp(8)); gravity = Gravity.CENTER
                     })
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -597,7 +837,7 @@ class OverlayService : Service() {
 
                 // 分割线（竖向）
                 mainRow.addView(View(this).apply {
-                    setBackgroundColor(Color.parseColor("#E8DDD5"))
+                    setBackgroundColor(alphaColor(overlayAccent, 90))
                     layoutParams = LinearLayout.LayoutParams(dp(1), LinearLayout.LayoutParams.MATCH_PARENT)
                 })
 
@@ -609,7 +849,7 @@ class OverlayService : Service() {
                 }
 
                 val resultTitle = TextView(this).apply {
-                    text = "搜索结果"; setTextColor(Color.parseColor("#A1887F")); textSize = 11f
+                    text = "搜索结果"; setTextColor(overlayTextSecondary); textSize = 11f
                     setPadding(0, 0, 0, dp(4))
                 }
                 rightPanel.addView(resultTitle)
@@ -632,7 +872,7 @@ class OverlayService : Service() {
                     updateSearchResults(rl, searchResults, actionBarContainer)
                 } else {
                     rl.addView(TextView(this).apply {
-                        text = "暂无结果"; setTextColor(Color.parseColor("#8D6E63")); textSize = 12f
+                        text = "暂无结果"; setTextColor(overlayTextMuted); textSize = 12f
                         setPadding(dp(8), dp(20), dp(8), dp(8)); gravity = Gravity.CENTER
                     })
                 }
@@ -657,7 +897,7 @@ class OverlayService : Service() {
                 }
                 val status = TextView(this).apply {
                     text = if (pid != null) "PID:$pid" else "⚠未附加"
-                    setTextColor(if (pid != null) Color.parseColor("#66BB6A") else Color.parseColor("#FF8F00"))
+                    setTextColor(if (pid != null) overlaySuccess else overlayWarning)
                     textSize = 11f
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
@@ -665,20 +905,18 @@ class OverlayService : Service() {
 
                 val types = arrayOf("dword", "float", "double", "byte", "word", "qword")
                 val typeSpinner = Spinner(this).apply {
-                    adapter = ArrayAdapter(this@OverlayService, android.R.layout.simple_spinner_dropdown_item, types)
+                    adapter = themedSpinnerAdapter(types)
                     layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 }
+                styleSpinner(typeSpinner)
                 topRow.addView(typeSpinner)
                 content.addView(topRow)
 
                 val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(6), dp(2), dp(6), dp(2)) }
                 fun modeBtn(label: String, mode: String): Button {
                     return Button(this).apply {
-                        text = label; textSize = 10f; setTextColor(Color.parseColor("#FFF3E0"))
-                        background = GradientDrawable().apply {
-                            cornerRadius = dp(4).toFloat()
-                            setColor(if (currentSearchMode == mode) Color.parseColor("#8D6E63") else Color.parseColor("#333333"))
-                        }
+                        text = label; textSize = 10f; setTextColor(overlayTextPrimary)
+                        background = softButtonDrawable(overlayAccent, active = currentSearchMode == mode, compact = true)
                         setPadding(dp(4), dp(2), dp(4), dp(2))
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(2) }
                         setOnClickListener { currentSearchMode = mode; showSearchPanel() }
@@ -737,13 +975,12 @@ class OverlayService : Service() {
             "exact" -> {
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(inputPadding, dp(2), inputPadding, dp(2)) }
                 val inp = EditText(this).apply {
-                    hint = "输入数值"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                    setPadding(dp(8), dp(6), dp(8), dp(6)); textSize = 13f
+                    hint = "输入数值"
                     inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     setText(savedSearchInput)
                 }
+                styleInputField(inp)
                 row.addView(inp)
                 row.addView(iconBtn(R.drawable.bt_shuousuo) {
                     val v = inp.text.toString()
@@ -766,13 +1003,12 @@ class OverlayService : Service() {
 
                 val fRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(inputPadding, dp(2), inputPadding, dp(2)) }
                 val fInp = EditText(this).apply {
-                    hint = "新值(过滤)"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                    setPadding(dp(8), dp(6), dp(8), dp(6)); textSize = 13f
+                    hint = "新值(过滤)"
                     inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     setText(savedFilterInput)
                 }
+                styleInputField(fInp)
                 fRow.addView(fInp)
                 fRow.addView(iconBtn(R.drawable.bt_guolv) {
                     val v = fInp.text.toString()
@@ -794,8 +1030,8 @@ class OverlayService : Service() {
                 val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(inputPadding, dp(2), inputPadding, dp(2)) }
                 fun fuzzyBtn(label: String, cmp: String, color: String): Button {
                     return Button(this).apply {
-                        text = label; textSize = 11f; setTextColor(Color.parseColor("#FFF3E0"))
-                        background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor(color)) }
+                        text = label; textSize = 11f; setTextColor(overlayTextPrimary)
+                        background = filledButtonDrawable(parseUiColor(color), compact = true)
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(3); bottomMargin = dp(2) }
                         setOnClickListener {
@@ -824,23 +1060,21 @@ class OverlayService : Service() {
             "range" -> {
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(inputPadding, dp(2), inputPadding, dp(2)) }
                 val minInp = EditText(this).apply {
-                    hint = "Min"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                    setPadding(dp(8), dp(6), dp(8), dp(6)); textSize = 13f
+                    hint = "Min"
                     inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     setText(savedRangeMin)
                 }
+                styleInputField(minInp)
                 val maxInp = EditText(this).apply {
-                    hint = "Max"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                    setPadding(dp(8), dp(6), dp(8), dp(6)); textSize = 13f
+                    hint = "Max"
                     inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     setText(savedRangeMax)
                 }
+                styleInputField(maxInp)
                 row.addView(minInp)
-                row.addView(TextView(this).apply { text = "~"; setTextColor(Color.parseColor("#FFF3E0")); setPadding(dp(4), dp(6), dp(4), dp(6)) })
+                row.addView(TextView(this).apply { text = "~"; setTextColor(overlayTextSecondary); setPadding(dp(4), dp(6), dp(4), dp(6)) })
                 row.addView(maxInp)
                 row.addView(smallBtn("扫描") {
                     val lo = minInp.text.toString().toLongOrNull()
@@ -865,13 +1099,12 @@ class OverlayService : Service() {
             "addr" -> {
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(inputPadding, dp(2), inputPadding, dp(2)) }
                 val inp = EditText(this).apply {
-                    hint = "0x728B3A4D"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                    setPadding(dp(8), dp(6), dp(8), dp(6)); textSize = 13f
+                    hint = "0x728B3A4D"
                     inputType = android.text.InputType.TYPE_CLASS_TEXT
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     setText(savedSearchInput)
                 }
+                styleInputField(inp)
                 row.addView(inp)
                 row.addView(smallBtn("读取") {
                     val addr = inp.text.toString().trim()
@@ -894,13 +1127,12 @@ class OverlayService : Service() {
             "machine" -> {
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(inputPadding, dp(2), inputPadding, dp(2)) }
                 val inp = EditText(this).apply {
-                    hint = "48 89 5C 24 ?? CC"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                    setPadding(dp(8), dp(6), dp(8), dp(6)); textSize = 13f
+                    hint = "48 89 5C 24 ?? CC"
                     inputType = android.text.InputType.TYPE_CLASS_TEXT
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     setText(savedSearchInput)
                 }
+                styleInputField(inp)
                 row.addView(inp)
                 row.addView(iconBtn(R.drawable.bt_shuousuo) {
                     val pattern = inp.text.toString().trim()
@@ -988,15 +1220,15 @@ class OverlayService : Service() {
             if (actionBarContainer != null) {
                 actionBarContainer.visibility = android.view.View.GONE
             }
-            rl.addView(TextView(this).apply { text = "未找到结果"; setTextColor(Color.parseColor("#A1887F")); textSize = 11f; setPadding(dp(8), dp(4), dp(8), dp(4)) })
+            rl.addView(TextView(this).apply { text = "未找到结果"; setTextColor(overlayTextMuted); textSize = 11f; setPadding(dp(8), dp(4), dp(8), dp(4)) })
             return
         }
 
         // 批量操作按钮栏
         val actionBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(2), dp(2), dp(2), dp(4))
-            background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(Color.parseColor("#723d09")) }
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = cardDrawable(overlayAccent, compact = true)
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4) }
         }
 
@@ -1006,8 +1238,10 @@ class OverlayService : Service() {
         // 创建均匀分布的按钮
         fun actionBtn(text: String, onClick: () -> Unit): Button {
             return Button(this).apply {
-                this.text = text; setTextColor(Color.parseColor("#FFF3E0")); textSize = 11f
-                background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(Color.parseColor("#8D6E63")) }
+                this.text = text
+                setTextColor(overlayTextPrimary)
+                textSize = 11f
+                background = softButtonDrawable(overlayAccent, compact = true)
                 setPadding(dp(4), dp(0), dp(4), dp(0))
                 layoutParams = LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(2) }
                 setOnClickListener { onClick() }
@@ -1082,14 +1316,14 @@ class OverlayService : Service() {
             val displayText = if (mc.isNotEmpty()) "${index+1}. $mc=$v" else "${index+1}. $addr=$v"
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; setPadding(dp(4), dp(3), dp(4), dp(3))
-                background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(Color.parseColor("#8B4513")) }
+                background = cardDrawable(overlayAccent, compact = true)
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(2) }
             }
 
             // 复选框
             val checkBox = android.widget.CheckBox(this).apply {
                 isChecked = selectedIndices.contains(index)
-                buttonTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#8D6E63"))
+                buttonTintList = android.content.res.ColorStateList.valueOf(overlayAccentStrong)
                 setPadding(0, 0, dp(4), 0)
                 setOnCheckedChangeListener { _, isChecked ->
                     if (isChecked) selectedIndices.add(index) else selectedIndices.remove(index)
@@ -1099,7 +1333,7 @@ class OverlayService : Service() {
 
             // 机器码+值（或地址+值作为fallback）
             row.addView(TextView(this).apply {
-                text = displayText; setTextColor(Color.parseColor("#8D6E63")); textSize = 10f
+                text = displayText; setTextColor(overlayTextSecondary); textSize = 10f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
 
@@ -1158,8 +1392,10 @@ class OverlayService : Service() {
 
     private fun miniBtn(text: String, onClick: () -> Unit): Button {
         return Button(this).apply {
-            this.text = text; setTextColor(Color.parseColor("#FFF3E0")); textSize = 10f
-            background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(Color.parseColor("#8D6E63")) }
+            this.text = text
+            setTextColor(overlayTextPrimary)
+            textSize = 10f
+            background = filledButtonDrawable(overlayAccent, compact = true)
             setPadding(dp(6), dp(0), dp(6), dp(0))
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(28))
             setOnClickListener { onClick() }
@@ -1168,20 +1404,19 @@ class OverlayService : Service() {
 
     private fun showWriteDialog(addr: String, curVal: Any?, machineCode: String = "") {
         makeDraggablePanel("修改内存值", { content ->
-            content.addView(TextView(this).apply { text = "地址: $addr"; setTextColor(Color.parseColor("#A1887F")); textSize = 12f; setPadding(dp(12), dp(8), dp(12), dp(2)) })
+            content.addView(TextView(this).apply { text = "地址: $addr"; setTextColor(overlayTextSecondary); textSize = 12f; setPadding(dp(12), dp(8), dp(12), dp(2)) })
             if (machineCode.isNotEmpty()) {
-                content.addView(TextView(this).apply { text = "机器码: $machineCode"; setTextColor(Color.parseColor("#8D6E63")); textSize = 11f; setPadding(dp(12), dp(2), dp(12), dp(2)) })
+                content.addView(TextView(this).apply { text = "机器码: $machineCode"; setTextColor(overlayTextMuted); textSize = 11f; setPadding(dp(12), dp(2), dp(12), dp(2)) })
             }
-            content.addView(TextView(this).apply { text = "当前值: $curVal"; setTextColor(Color.parseColor("#A1887F")); textSize = 12f; setPadding(dp(12), dp(2), dp(12), dp(8)) })
+            content.addView(TextView(this).apply { text = "当前值: $curVal"; setTextColor(overlayTextSecondary); textSize = 12f; setPadding(dp(12), dp(2), dp(12), dp(8)) })
 
             val inp = EditText(this).apply {
-                hint = "输入新值"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                setPadding(dp(12), dp(8), dp(12), dp(8))
+                hint = "输入新值"
                 inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
                 setText(curVal.toString())
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12); marginEnd = dp(12) }
             }
+            styleInputField(inp)
             content.addView(inp)
 
             val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(12), dp(12), dp(12), dp(8)) }
@@ -1231,24 +1466,23 @@ class OverlayService : Service() {
                 if (mc.isNotEmpty()) "$mc = $v" else "$addr = $v"
             }
             content.addView(TextView(this).apply {
-                text = addrList; setTextColor(Color.parseColor("#A1887F")); textSize = 11f
+                text = addrList; setTextColor(overlayTextSecondary); textSize = 11f
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 maxLines = 6
             })
 
             // 输入新值
             content.addView(TextView(this).apply {
-                text = "输入新值（将应用到所有 $count 条数据）："; setTextColor(Color.parseColor("#FFF3E0")); textSize = 12f
+                text = "输入新值（将应用到所有 $count 条数据）："; setTextColor(overlayTextPrimary); textSize = 12f
                 setPadding(dp(12), dp(8), dp(12), dp(4))
             })
 
             val inp = EditText(this).apply {
-                hint = "输入新值"; setTextColor(Color.parseColor("#FFF3E0")); setHintTextColor(Color.parseColor("#BCAAA4"))
-                background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(Color.parseColor("#8B4513")) }
-                setPadding(dp(12), dp(8), dp(12), dp(8))
+                hint = "输入新值"
                 inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12); marginEnd = dp(12) }
             }
+            styleInputField(inp)
             content.addView(inp)
 
             // 按钮
@@ -1300,8 +1534,7 @@ class OverlayService : Service() {
     private fun showAIChatPanel() {
         saveLastPanel("chat")
         makeDraggablePanel("AI 对话", { content ->
-            // AI 对话深色主题覆盖
-            content.setBackgroundColor(Color.parseColor("#723d09"))
+            content.background = panelContentDrawable()
 
             // 获取附加进程信息
             val prefs = getSharedPreferences("gg_overlay", Context.MODE_PRIVATE)
@@ -1316,25 +1549,19 @@ class OverlayService : Service() {
                 } else {
                     "⚠️ 未附加进程，请先附加游戏"
                 }
-                setTextColor(if (attachedPid != -1) Color.parseColor("#66BB6A") else Color.parseColor("#FF8F00"))
+                setTextColor(if (attachedPid != -1) overlaySuccess else overlayWarning)
                 textSize = 11f
                 setPadding(dp(12), dp(8), dp(12), dp(4))
             }
             content.addView(status)
 
             // 分割线
-            content.addView(View(this).apply {
-                setBackgroundColor(Color.parseColor("#8B4513"))
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-            })
+            content.addView(overlayDivider())
 
             // 消息显示区域
             val messageArea = ScrollView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(8).toFloat()
-                    setColor(Color.parseColor("#723d09"))
-                }
+                background = cardDrawable(parseUiColor("#6FE8FF"), emphasized = true)
             }
             val messageList = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1378,20 +1605,11 @@ class OverlayService : Service() {
             val inputArea = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(dp(5), dp(5), dp(5), dp(5))
-                setBackgroundColor(Color.parseColor("#723d09"))
+                background = cardDrawable(parseUiColor("#6FE8FF"), compact = true)
             }
 
             val inputField = EditText(this).apply {
                 hint = "输入你的需求..."
-                setTextColor(Color.parseColor("#FFF3E0"))
-                setHintTextColor(Color.parseColor("#BCAAA4"))
-                textSize = 13f
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(6).toFloat()
-                    setColor(Color.parseColor("#8B4513"))
-                    setStroke(dp(1), Color.WHITE)
-                }
-                setPadding(dp(5), dp(5), dp(5), dp(5))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
 
                 isFocusable = true
@@ -1420,16 +1638,14 @@ class OverlayService : Service() {
                     imm.showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_FORCED)
                 }
             }
+            styleInputField(inputField, parseUiColor("#6FE8FF"))
 
             val sendBtn = TextView(this).apply {
                 text = "发送"
-                setTextColor(Color.parseColor("#FFF3E0"))
+                setTextColor(overlayTextPrimary)
                 textSize = 12f
                 gravity = android.view.Gravity.CENTER
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(6).toFloat()
-                    setColor(Color.parseColor("#A1612D"))
-                }
+                background = filledButtonDrawable(parseUiColor("#6FE8FF"))
                 setPadding(dp(5), dp(5), dp(5), dp(5))
                 setOnClickListener {
                     val userInput = inputField.text.toString().trim()
@@ -1455,18 +1671,15 @@ class OverlayService : Service() {
                         }
                         streamBubble.addView(TextView(this@OverlayService).apply {
                             text = "🤖 AI"
-                            setTextColor(Color.parseColor("#8D6E63"))
+                            setTextColor(overlayAccentStrong)
                             textSize = 11f
                             setPadding(0, 0, 0, dp(2))
                         })
                         val streamText = TextView(this@OverlayService).apply {
                             text = "正在思考..."
-                            setTextColor(Color.parseColor("#FFF3E0"))
+                            setTextColor(overlayTextPrimary)
                             textSize = 12f
-                            background = GradientDrawable().apply {
-                                cornerRadius = dp(8).toFloat()
-                                setColor(Color.parseColor("#8B4513"))
-                            }
+                            background = cardDrawable(parseUiColor("#6FE8FF"), emphasized = true)
                             setPadding(dp(12), dp(8), dp(12), dp(8))
                         }
                         streamBubble.addView(streamText)
@@ -1510,9 +1723,9 @@ class OverlayService : Service() {
             }
             val smallBtnStyle = { text: String, onClick: () -> Unit ->
                 TextView(this).apply {
-                    this.text = text; setTextColor(Color.parseColor("#FFF3E0")); textSize = 10f
+                    this.text = text; setTextColor(overlayTextPrimary); textSize = 10f
                     gravity = android.view.Gravity.CENTER
-                    background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#A1612D")) }
+                    background = softButtonDrawable(parseUiColor("#6FE8FF"), active = true, compact = true)
                     setPadding(dp(5), dp(5), dp(5), dp(5))
                     setOnClickListener { onClick() }
                 }
@@ -1535,7 +1748,7 @@ class OverlayService : Service() {
             // 滚动到底部
             messageArea.post { messageArea.fullScroll(ScrollView.FOCUS_DOWN) }
 
-        }, 320, 550, titleIcon = R.drawable.ai)
+        }, 332, 560, titleIcon = R.drawable.ai, bgColor = "#6FE8FF")
     }
 
     // 创建消息气泡（用户消息用 TextView，AI 消息用 WebView 渲染 Markdown/LaTeX/Mermaid）
@@ -1551,7 +1764,7 @@ class OverlayService : Service() {
             // 发送者标签
             addView(TextView(this@OverlayService).apply {
                 text = sender
-                setTextColor(if (isUser) Color.parseColor("#FFCC80") else Color.parseColor("#FFB74D"))
+                setTextColor(if (isUser) overlayAccentStrong else overlayTextSecondary)
                 textSize = 11f
                 setPadding(0, 0, 0, dp(2))
             })
@@ -1560,12 +1773,9 @@ class OverlayService : Service() {
                 // 用户消息用 TextView
                 addView(TextView(this@OverlayService).apply {
                     text = message
-                    setTextColor(Color.parseColor("#FFF3E0"))
+                    setTextColor(overlayTextPrimary)
                     textSize = 12f
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(8).toFloat()
-                        setColor(Color.parseColor("#8B4513"))
-                    }
+                    background = cardDrawable(parseUiColor("#57B9FF"), emphasized = true)
                     setPadding(dp(12), dp(8), dp(12), dp(8))
                 })
             } else {
@@ -1905,7 +2115,7 @@ class OverlayService : Service() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            setBackgroundColor(Color.parseColor("#723d09"))
+            setBackgroundColor(overlaySurfaceCard)
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -2555,7 +2765,7 @@ class OverlayService : Service() {
         makeDraggablePanel("脚本库", { content ->
             val status = TextView(this).apply {
                 text = "正在加载脚本..."
-                setTextColor(Color.parseColor("#FFF3E0"))
+                setTextColor(overlayTextPrimary)
                 textSize = 12f
                 setPadding(dp(12), dp(8), dp(12), dp(4))
             }
@@ -2583,10 +2793,7 @@ class OverlayService : Service() {
                             val item = LinearLayout(this).apply {
                                 orientation = LinearLayout.HORIZONTAL
                                 setPadding(dp(12), dp(10), dp(12), dp(10))
-                                background = GradientDrawable().apply {
-                                    cornerRadius = dp(8).toFloat()
-                                    setColor(Color.parseColor("#8B4513"))
-                                }
+                                background = cardDrawable(parseUiColor("#7C9EFF"), emphasized = true)
                                 layoutParams = LinearLayout.LayoutParams(
                                     LinearLayout.LayoutParams.MATCH_PARENT,
                                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -2594,7 +2801,7 @@ class OverlayService : Service() {
                             }
                             val nameText = TextView(this).apply {
                                 text = script["name"] ?: "未知脚本"
-                                setTextColor(Color.parseColor("#FFF3E0"))
+                                setTextColor(overlayTextPrimary)
                                 textSize = 14f
                                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                             }
@@ -2629,7 +2836,7 @@ class OverlayService : Service() {
                         if (scripts.isEmpty()) {
                             list.addView(TextView(this).apply {
                                 text = "暂无脚本\n请在主应用脚本库中创建"
-                                setTextColor(Color.parseColor("#A1887F"))
+                                setTextColor(overlayTextMuted)
                                 textSize = 13f
                                 setPadding(dp(12), dp(20), dp(12), dp(8))
                                 gravity = Gravity.CENTER
@@ -2643,11 +2850,15 @@ class OverlayService : Service() {
             loadScripts()
 
             // 底部按钮：刷新 + 关闭窗口
-            val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(12), dp(4), dp(12), dp(8)) }
+            val bar = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(12), dp(6), dp(12), dp(10))
+                background = cardDrawable(parseUiColor("#7C9EFF"), compact = true)
+            }
             bar.addView(iconBtn(R.drawable.shuaxing) { loadScripts() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             bar.addView(iconBtn(R.drawable.ck_gb) { closePanel() }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             content.addView(bar)
-        }, 300, 420, titleIcon = R.drawable.jiaoben, bgColor = "#723d09")
+        }, 308, 432, titleIcon = R.drawable.jiaoben, bgColor = "#7C9EFF")
     }
 
     /**
@@ -2807,29 +3018,48 @@ mainMenu()""",
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(Color.parseColor("#8B4513")) }
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = cardDrawable(overlayAccent, emphasized = true)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
             setOnClickListener { onClick() }
             if (iconRes != null) {
                 addView(ImageView(this@OverlayService).apply {
                     setImageResource(iconRes)
+                    setColorFilter(overlayAccentStrong)
                     layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) }
                     scaleType = ImageView.ScaleType.CENTER_INSIDE
                 })
             }
-            addView(TextView(this@OverlayService).apply {
-                this.text = text; setTextColor(Color.parseColor("#FFF3E0")); textSize = 14f
+            addView(LinearLayout(this@OverlayService).apply {
+                orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@OverlayService).apply {
+                    this.text = text
+                    setTextColor(overlayTextPrimary)
+                    textSize = 14f
+                })
+                addView(TextView(this@OverlayService).apply {
+                    text = "进入 ${text} 工具"
+                    setTextColor(overlayTextSecondary)
+                    textSize = 10f
+                    setPadding(0, dp(3), 0, 0)
+                })
+            })
+            addView(TextView(this@OverlayService).apply {
+                text = "›"
+                setTextColor(overlayAccentStrong)
+                textSize = 18f
             })
         }
     }
 
     private fun smallBtn(text: String, onClick: () -> Unit): Button {
         return Button(this).apply {
-            this.text = text; setTextColor(Color.parseColor("#FFF3E0")); textSize = 11f
-            background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8D6E63")) }
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            this.text = text
+            setTextColor(overlayTextPrimary)
+            textSize = 11f
+            background = filledButtonDrawable(overlayAccent, compact = true)
+            setPadding(dp(10), dp(5), dp(10), dp(5))
             setOnClickListener { onClick() }
         }
     }
@@ -2838,18 +3068,22 @@ mainMenu()""",
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply { cornerRadius = dp(6).toFloat(); setColor(Color.parseColor("#8D6E63")) }
-            setPadding(dp(6), dp(4), dp(6), dp(4))
+            background = softButtonDrawable(overlayAccent, compact = true)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
             setOnClickListener { onClick() }
             addView(ImageView(this@OverlayService).apply {
                 setImageResource(iconRes)
+                setColorFilter(overlayAccentStrong)
                 layoutParams = LinearLayout.LayoutParams(dp(20), dp(20))
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
             })
             if (label.isNotEmpty()) {
                 addView(TextView(this@OverlayService).apply {
-                    text = label; setTextColor(Color.parseColor("#FFF3E0")); textSize = 9f
+                    text = label
+                    setTextColor(overlayTextPrimary)
+                    textSize = 9f
                     gravity = Gravity.CENTER
+                    setPadding(0, dp(4), 0, 0)
                 })
             }
         }
