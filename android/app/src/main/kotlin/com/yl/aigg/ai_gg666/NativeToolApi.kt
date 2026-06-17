@@ -26,7 +26,7 @@ object NativeToolApi {
 
     fun listProcesses(): String {
         val ctx = appContext ?: return "❌ NativeToolApi 尚未初始化"
-        val processes = ProcessManager.getProcessList(ctx)
+        val processes = ProcessManager.getProcessList(ctx, includeSystem = false)
         if (processes.isEmpty()) return "当前未发现可附加进程"
 
         val sb = StringBuilder("可附加进程列表：\n")

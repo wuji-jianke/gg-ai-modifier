@@ -1,10 +1,13 @@
 package com.yl.aigg.ai_gg666
 
-import android.os.Handler
-import android.os.Looper
-
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * 进程管理器
@@ -14,12 +17,16 @@ import android.content.pm.PackageManager
 object ProcessManager {
 
     private var appInfoCache: Map<String, ApplicationInfo> = emptyMap()
+    private val iconPathCache = mutableMapOf<String, String?>()
 
     /**
      * 获取运行中的应用进程列表
      * 使用 pm + ps 快速获取，避免遍历 /proc
      */
-    fun getProcessList(context: android.content.Context): List<Map<String, Any>> {
+    fun getProcessList(
+        context: android.content.Context,
+        includeSystem: Boolean = true
+    ): List<Map<String, Any>> {
         val processes = mutableListOf<Map<String, Any>>()
 
         try {
@@ -41,9 +48,13 @@ object ProcessManager {
 
                     if (packageName.isEmpty() || !packageName.contains(".")) continue
 
+                    val appPackage = normalizePackageName(packageName)
+
                     // 获取 APP 名称
-                    val appName = getAppName(pm, packageName)
-                    val isSystem = isSystemApp(packageName)
+                    val appName = getAppName(pm, appPackage)
+                    val isSystem = isSystemApp(appPackage)
+                    if (!includeSystem && isSystem) continue
+                    val iconPath = getAppIconPath(context, pm, appPackage)
 
                     processes.add(
                         mapOf(
@@ -51,7 +62,8 @@ object ProcessManager {
                             "packageName" to packageName,
                             "processName" to appName,
                             "uid" to 0,
-                            "isSystem" to isSystem
+                            "isSystem" to isSystem,
+                            "iconPath" to (iconPath ?: "")
                         )
                     )
                 }
@@ -59,14 +71,14 @@ object ProcessManager {
 
             // 如果 ps 命令失败，尝试备用方案
             if (processes.isEmpty()) {
-                return getProcessListFallback(context)
+                return getProcessListFallback(context, includeSystem)
             }
         } catch (e: Exception) {
-            return getProcessListFallback(context)
+            return getProcessListFallback(context, includeSystem)
         }
 
         return processes
-            .distinctBy { it["packageName"] as String }
+            .distinctBy { "${it["packageName"]}_${it["pid"]}" }
             .sortedWith(compareBy<Map<String, Any>> {
                 val name = it["processName"] as String
                 // 中文名称排前面
@@ -77,7 +89,10 @@ object ProcessManager {
     /**
      * 备用方案：使用 pm list packages + cat /proc/pid/cmdline
      */
-    private fun getProcessListFallback(context: android.content.Context): List<Map<String, Any>> {
+    private fun getProcessListFallback(
+        context: android.content.Context,
+        includeSystem: Boolean = true
+    ): List<Map<String, Any>> {
         val processes = mutableListOf<Map<String, Any>>()
 
         try {
@@ -103,8 +118,11 @@ object ProcessManager {
 
                     if (packageName.isEmpty()) continue
 
-                    val appName = getAppName(pm, packageName)
-                    val isSystem = isSystemApp(packageName)
+                    val appPackage = normalizePackageName(packageName)
+                    val appName = getAppName(pm, appPackage)
+                    val isSystem = isSystemApp(appPackage)
+                    if (!includeSystem && isSystem) continue
+                    val iconPath = getAppIconPath(context, pm, appPackage)
 
                     processes.add(
                         mapOf(
@@ -112,7 +130,8 @@ object ProcessManager {
                             "packageName" to packageName,
                             "processName" to appName,
                             "uid" to 0,
-                            "isSystem" to isSystem
+                            "isSystem" to isSystem,
+                            "iconPath" to (iconPath ?: "")
                         )
                     )
                 }
@@ -120,7 +139,7 @@ object ProcessManager {
         } catch (e: Exception) {}
 
         return processes
-            .distinctBy { it["packageName"] as String }
+            .distinctBy { "${it["packageName"]}_${it["pid"]}" }
             .sortedWith(compareBy<Map<String, Any>> {
                 val name = it["processName"] as String
                 if (name.isNotEmpty() && name[0].code > 127) 0 else 1
@@ -141,6 +160,62 @@ object ProcessManager {
         } catch (e: Exception) {
             packageName
         }
+    }
+
+    fun getAppIconDrawable(context: android.content.Context, packageName: String): Drawable? {
+        val pm = context.packageManager
+        val appPackage = normalizePackageName(packageName)
+        return try {
+            val appInfo = appInfoCache[appPackage] ?: pm.getApplicationInfo(appPackage, 0)
+            appInfo.loadIcon(pm)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun getAppIconPath(
+        context: android.content.Context,
+        pm: PackageManager,
+        packageName: String
+    ): String? {
+        iconPathCache[packageName]?.let { return it }
+
+        val path = try {
+            val appInfo = appInfoCache[packageName] ?: return null
+            val icon = appInfo.loadIcon(pm)
+            val iconDir = File(context.cacheDir, "process_icons").apply { mkdirs() }
+            val iconFile = File(iconDir, "${packageName.replace(':', '_')}.png")
+            if (!iconFile.exists() || iconFile.length() == 0L) {
+                val bitmap = drawableToBitmap(icon)
+                FileOutputStream(iconFile).use { output ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                }
+            }
+            iconFile.absolutePath
+        } catch (e: Exception) {
+            null
+        }
+
+        iconPathCache[packageName] = path
+        return path
+    }
+
+    private fun drawableToBitmap(drawable: Drawable): Bitmap {
+        if (drawable is BitmapDrawable && drawable.bitmap != null) {
+            return drawable.bitmap
+        }
+
+        val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: 96
+        val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: 96
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
+    private fun normalizePackageName(packageName: String): String {
+        return packageName.substringBefore(":").trim()
     }
 
     /**

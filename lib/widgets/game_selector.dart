@@ -2,6 +2,7 @@
 /// 显示运行中的进程列表，允许用户选择目标游戏
 
 import 'package:flutter/material.dart';
+import 'dart:io';
 import '../core/models/process_info.dart';
 
 /// 游戏选择器组件
@@ -145,10 +146,9 @@ class _GameSelectorState extends State<GameSelector> {
                 final isSelected = widget.selectedProcess?.pid == process.pid;
 
                 return ListTile(
-                  leading: Icon(
-                    isSelected ? Icons.check_circle : Icons.apps,
-                    color: isSelected ? const Color(0xFF8D6E63) : Color(0xFFA1887F),
-                    size: 20,
+                  leading: _GameProcessIcon(
+                    process: process,
+                    isSelected: isSelected,
                   ),
                   title: Text(
                     process.packageName,
@@ -173,6 +173,62 @@ class _GameSelectorState extends State<GameSelector> {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _GameProcessIcon extends StatelessWidget {
+  final ProcessInfo process;
+  final bool isSelected;
+
+  const _GameProcessIcon({
+    required this.process,
+    required this.isSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: (isSelected ? const Color(0xFF8D6E63) : const Color(0xFFA1887F))
+            .withOpacity(0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(
+        isSelected ? Icons.check_circle : Icons.apps,
+        color: isSelected ? const Color(0xFF8D6E63) : const Color(0xFFA1887F),
+        size: 20,
+      ),
+    );
+
+    final path = process.iconPath;
+    if (path == null || path.isEmpty) {
+      return fallback;
+    }
+
+    final file = File(path);
+    if (!file.existsSync()) {
+      return fallback;
+    }
+
+    return Container(
+      width: 36,
+      height: 36,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          file,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => fallback,
+        ),
+      ),
     );
   }
 }

@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:io';
 import '../../core/models/process_info.dart';
 
 /// 当前附加的进程 Provider
@@ -23,6 +24,7 @@ class ProcessSelectorPage extends ConsumerStatefulWidget {
 
 class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
   bool _isLoading = false;
+  bool _showSystemProcesses = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
 
@@ -37,23 +39,25 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
     try {
       const channel = MethodChannel('com.yl.aigg/bridge');
       final pid = await channel.invokeMethod('getAttachedPid');
-      
+
       if (pid != null && pid > 0 && mounted) {
         // 有附加的进程，获取进程信息
-        final result = await channel.invokeMethod('getProcessList');
+        final result = await channel.invokeMethod('getProcessList', {
+          'includeSystem': true,
+        });
         if (result != null) {
           final List<dynamic> list = result as List<dynamic>;
           final processes = list.map((item) {
             final map = Map<String, dynamic>.from(item as Map);
             return ProcessInfo.fromJson(map);
           }).toList();
-          
+
           // 找到对应的进程
           final attachedProcess = processes.firstWhere(
             (p) => p.pid == pid,
             orElse: () => processes.first,
           );
-          
+
           if (mounted) {
             ref.read(attachedProcessProvider.notifier).state = attachedProcess;
           }
@@ -75,7 +79,9 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
 
     try {
       const channel = MethodChannel('com.yl.aigg/bridge');
-      final result = await channel.invokeMethod('getProcessList');
+      final result = await channel.invokeMethod('getProcessList', {
+        'includeSystem': _showSystemProcesses,
+      });
 
       if (result != null && mounted) {
         final List<dynamic> list = result as List<dynamic>;
@@ -84,23 +90,8 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
           return ProcessInfo.fromJson(map);
         }).toList();
 
-        // 过滤掉系统进程，只显示应用进程
-        final appProcesses = processes
-            .where(
-              (p) =>
-                  !p.isSystem &&
-                  p.packageName.isNotEmpty &&
-                  !p.packageName.startsWith('com.android.') &&
-                  !p.packageName.startsWith('android.') &&
-                  p.packageName != 'system' &&
-                  p.packageName != 'zygote' &&
-                  p.packageName != 'zygote64' &&
-                  p.packageName.contains('.'),
-            )
-            .toList();
-
         if (mounted) {
-          ref.read(processListProvider.notifier).state = appProcesses;
+          ref.read(processListProvider.notifier).state = processes;
         }
       }
     } catch (e) {
@@ -162,6 +153,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
     final attachedProcess = ref.watch(attachedProcessProvider);
     final processes = ref.watch(processListProvider);
     final filteredProcesses = _filteredProcesses;
+    final countLabel = _showSystemProcesses ? '个进程' : '个应用进程';
 
     return Scaffold(
       appBar: AppBar(
@@ -254,7 +246,7 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
             child: Row(
               children: [
                 Text(
-                  '找到 ${filteredProcesses.length} 个应用进程',
+                  '找到 ${filteredProcesses.length} $countLabel',
                   style: const TextStyle(color: Color(0xFFA1887F), fontSize: 12),
                 ),
                 const Spacer(),
@@ -265,6 +257,26 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
               ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: _showSystemProcesses,
+              title: const Text(
+                '显示系统进程',
+                style: TextStyle(fontSize: 13),
+              ),
+              subtitle: const Text(
+                '默认只展示普通应用进程',
+                style: TextStyle(fontSize: 11, color: Color(0xFFA1887F)),
+              ),
+              onChanged: (value) {
+                setState(() => _showSystemProcesses = value);
+                _loadProcessList();
+              },
             ),
           ),
           const SizedBox(height: 8),
@@ -305,11 +317,9 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                       final isAttached = attachedProcess?.pid == process.pid;
 
                       return ListTile(
-                        leading: Icon(
-                          isAttached ? Icons.check_circle : Icons.apps,
-                          color: isAttached
-                              ? Colors.green
-                              : const Color(0xFF8D6E63),
+                        leading: _ProcessIcon(
+                          process: process,
+                          isAttached: isAttached,
                         ),
                         title: Text(
                           process.displayName,
@@ -348,6 +358,60 @@ class _ProcessSelectorPageState extends ConsumerState<ProcessSelectorPage> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ProcessIcon extends StatelessWidget {
+  final ProcessInfo process;
+  final bool isAttached;
+
+  const _ProcessIcon({required this.process, required this.isAttached});
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: isAttached
+            ? Colors.green.withOpacity(0.12)
+            : const Color(0xFF8D6E63).withOpacity(0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(
+        isAttached ? Icons.check_circle : Icons.apps,
+        color: isAttached ? Colors.green : const Color(0xFF8D6E63),
+        size: 20,
+      ),
+    );
+
+    final path = process.iconPath;
+    if (path == null || path.isEmpty) {
+      return fallback;
+    }
+
+    final file = File(path);
+    if (!file.existsSync()) {
+      return fallback;
+    }
+
+    return Container(
+      width: 40,
+      height: 40,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          file,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => fallback,
+        ),
       ),
     );
   }

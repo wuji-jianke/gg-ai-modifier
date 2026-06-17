@@ -45,9 +45,13 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 // 进程管理（后台线程执行，避免阻塞 UI）
                 "getProcessList" -> {
+                    val includeSystem = call.argument<Boolean>("includeSystem") ?: false
                     Thread {
                         try {
-                            val processes = ProcessManager.getProcessList(this@MainActivity as android.content.Context)
+                            val processes = ProcessManager.getProcessList(
+                                this@MainActivity as android.content.Context,
+                                includeSystem = includeSystem
+                            )
                             runOnUiThread { result.success(processes) }
                         } catch (e: Exception) {
                             runOnUiThread { result.error("PROCESS_LIST_ERROR", e.message, null) }
@@ -418,15 +422,23 @@ class MainActivity : FlutterActivity() {
                         val baseUrl = call.argument<String>("baseUrl") ?: ""
                         val apiKey = call.argument<String>("apiKey") ?: ""
                         val model = call.argument<String>("model") ?: "deepseek-chat"
+                        val apiFormat = call.argument<String>("apiFormat") ?: "openai_chat_completions"
                         val temperature = call.argument<Double>("temperature") ?: 0.7
                         val maxTokens = call.argument<Int>("maxTokens") ?: 4096
+                        val streamEnabled = call.argument<Boolean>("streamEnabled") ?: true
+                        val timeoutSeconds = call.argument<Int>("timeoutSeconds") ?: 60
+                        val availableModels = call.argument<List<String>>("availableModels") ?: emptyList()
 
                         val json = org.json.JSONObject().apply {
                             put("baseUrl", baseUrl)
                             put("apiKey", apiKey)
                             put("model", model)
+                            put("apiFormat", apiFormat)
                             put("temperature", temperature)
                             put("maxTokens", maxTokens)
+                            put("streamEnabled", streamEnabled)
+                            put("timeoutSeconds", timeoutSeconds)
+                            put("availableModels", org.json.JSONArray(availableModels))
                         }
 
                         val prefs = getSharedPreferences("gg_llm_config", Context.MODE_PRIVATE)

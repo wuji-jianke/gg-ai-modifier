@@ -51,9 +51,11 @@ class NativeBridge {
   // ==================== 进程管理 ====================
 
   /// 获取运行中的进程列表
-  Future<List<ProcessInfo>> getProcessList() async {
+  Future<List<ProcessInfo>> getProcessList({bool includeSystem = false}) async {
     try {
-      final result = await _channel.invokeMethod('getProcessList');
+      final result = await _channel.invokeMethod('getProcessList', {
+        'includeSystem': includeSystem,
+      });
       if (result == null) return [];
 
       final List<dynamic> list = result as List<dynamic>;

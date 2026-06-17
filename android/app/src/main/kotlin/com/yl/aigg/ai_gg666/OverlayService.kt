@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
@@ -33,6 +34,7 @@ import android.widget.Spinner
 import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.Switch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -42,6 +44,45 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class OverlayService : Service() {
+
+    private enum class LlmApiFormat {
+        OPENAI_CHAT_COMPLETIONS,
+        OPENAI_RESPONSES,
+        ANTHROPIC_MESSAGES;
+
+        companion object {
+            fun fromValue(value: String?): LlmApiFormat {
+                return when (value) {
+                    "openai_responses" -> OPENAI_RESPONSES
+                    "anthropic_messages" -> ANTHROPIC_MESSAGES
+                    else -> OPENAI_CHAT_COMPLETIONS
+                }
+            }
+        }
+    }
+
+    private data class LlmRuntimeConfig(
+        val baseUrl: String,
+        val apiKey: String,
+        val model: String,
+        val apiFormat: LlmApiFormat,
+        val temperature: Double,
+        val maxTokens: Int,
+        val timeoutSeconds: Int,
+        val streamEnabled: Boolean,
+    )
+
+    private data class ToolCallSpec(
+        val id: String,
+        val name: String,
+        val arguments: JSONObject,
+    )
+
+    private data class PendingToolCall(
+        var id: String = "",
+        var name: String = "",
+        val arguments: StringBuilder = StringBuilder(),
+    )
 
     companion object {
         private const val CHANNEL_ID = "overlay_channel"
@@ -73,6 +114,7 @@ class OverlayService : Service() {
 
     // 记住上次打开的面板
     private var lastPanel = ""
+    private var overlayShowSystemProcesses = false
 
     private val overlayTextPrimary = Color.parseColor("#F3F7FF")
     private val overlayTextSecondary = Color.parseColor("#9AAFD0")
@@ -670,7 +712,39 @@ class OverlayService : Service() {
 
             val sv = ScrollView(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f) }
             val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(4), dp(8), dp(4)) }
-            sv.addView(list); content.addView(sv)
+            sv.addView(list)
+
+            val toggleRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), 0, dp(12), dp(8))
+                background = cardDrawable(parseUiColor("#4DD0E1"), compact = true)
+            }
+            toggleRow.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@OverlayService).apply {
+                    text = "显示系统进程"
+                    setTextColor(overlayTextPrimary)
+                    textSize = 12f
+                })
+                addView(TextView(this@OverlayService).apply {
+                    text = "默认只显示普通应用进程"
+                    setTextColor(overlayTextSecondary)
+                    textSize = 10f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            })
+            val systemSwitch = Switch(this).apply {
+                isChecked = overlayShowSystemProcesses
+                setOnCheckedChangeListener { _, isChecked ->
+                    overlayShowSystemProcesses = isChecked
+                    loadProcs(list, status)
+                }
+            }
+            toggleRow.addView(systemSwitch)
+            content.addView(toggleRow)
+            content.addView(sv)
 
             // 底部按钮
             val bar = LinearLayout(this).apply {
@@ -689,22 +763,47 @@ class OverlayService : Service() {
     private fun loadProcs(list: LinearLayout, status: TextView) {
         status.text = "正在扫描..."; list.removeAllViews()
         Thread {
-            val procs = ProcessManager.getProcessList(this@OverlayService).filter {
-                val p = it["packageName"] as String
-                p.isNotEmpty() && p.contains(".") && !p.startsWith("com.android.") && !p.startsWith("android.") &&
-                        p != "system" && p != "zygote" && p != "zygote64"
-            }
+            val procs = ProcessManager.getProcessList(
+                this@OverlayService,
+                includeSystem = overlayShowSystemProcesses
+            )
             handler.post {
-                status.text = "找到 ${procs.size} 个应用"
+                status.text = "找到 ${procs.size} 个" + if (overlayShowSystemProcesses) "进程" else "应用"
                 for (proc in procs) {
                     val name = proc["processName"] as String; val pkg = proc["packageName"] as String; val pid = proc["pid"] as Int
+                    val icon = ProcessManager.getAppIconDrawable(this@OverlayService, pkg)
                     val item = LinearLayout(this).apply {
-                        orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(10))
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
                         background = cardDrawable(parseUiColor("#4DD0E1"), emphasized = true)
                         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4) }
                     }
-                    item.addView(TextView(this).apply { text = name; setTextColor(overlayTextPrimary); textSize = 14f })
-                    item.addView(TextView(this).apply { text = "$pkg | PID: $pid"; setTextColor(overlayTextSecondary); textSize = 11f })
+                    item.addView(createProcessIconView(icon))
+                    item.addView(LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            marginStart = dp(10)
+                        }
+                        addView(TextView(this@OverlayService).apply {
+                            text = name
+                            setTextColor(overlayTextPrimary)
+                            textSize = 14f
+                        })
+                        addView(TextView(this@OverlayService).apply {
+                            text = "$pkg | PID: $pid"
+                            setTextColor(overlayTextSecondary)
+                            textSize = 11f
+                        })
+                        if ((proc["isSystem"] as? Boolean) == true) {
+                            addView(TextView(this@OverlayService).apply {
+                                text = "系统进程"
+                                setTextColor(overlayWarning)
+                                textSize = 10f
+                                setPadding(0, dp(4), 0, 0)
+                            })
+                        }
+                    })
                     item.setOnClickListener {
                         Thread {
                             val ok = MemoryEngine.attachProcess(pid)
@@ -722,6 +821,27 @@ class OverlayService : Service() {
                 }
             }
         }.start()
+    }
+
+    private fun createProcessIconView(icon: Drawable?): View {
+        return FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+            background = softButtonDrawable(parseUiColor("#4DD0E1"), compact = true)
+            if (icon != null) {
+                addView(ImageView(this@OverlayService).apply {
+                    setImageDrawable(icon)
+                    layoutParams = FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER)
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                })
+            } else {
+                addView(ImageView(this@OverlayService).apply {
+                    setImageResource(android.R.drawable.sym_def_app_icon)
+                    setColorFilter(overlayAccentStrong)
+                    layoutParams = FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER)
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                })
+            }
+        }
     }
     
     // 保存附加的进程信息，供主应用读取
@@ -1689,7 +1809,19 @@ class OverlayService : Service() {
                         // 调用 LLM API（支持 function calling）
                         Thread {
                             try {
-                                val result = callLlmApi(userInput, attachedName ?: "")
+                                val result = if (readLlmConfig().streamEnabled) {
+                                    callLlmApiStream(userInput, attachedName ?: "") { chunk ->
+                                        handler.post {
+                                            val current = streamText.tag as? String ?: ""
+                                            val updated = current + chunk
+                                            streamText.tag = updated
+                                            streamText.text = updated.ifEmpty { "正在思考..." }
+                                            messageArea.post { messageArea.fullScroll(ScrollView.FOCUS_DOWN) }
+                                        }
+                                    }
+                                } else {
+                                    callLlmApi(userInput, attachedName ?: "")
+                                }
                                 handler.post {
                                     chatMessages.add(Pair("🤖 AI", result))
                                     isAiResponding = false
@@ -2193,14 +2325,18 @@ class OverlayService : Service() {
 
     // ==================== 真实 LLM API 调用 ====================
 
-    private fun callLlmApi(userInput: String, attachedApp: String): String {
-        // 从 SharedPreferences 读取 LLM 配置（由主应用保存）
+    private fun readLlmConfig(): LlmRuntimeConfig {
         val configPrefs = getSharedPreferences("gg_llm_config", Context.MODE_PRIVATE)
         val configJson = configPrefs.getString("config", null)
 
         var baseUrl = ""
         var apiKey = ""
         var model = "deepseek-chat"
+        var apiFormat = LlmApiFormat.OPENAI_CHAT_COMPLETIONS
+        var temperature = 0.7
+        var maxTokens = 2048
+        var timeoutSeconds = 60
+        var streamEnabled = true
 
         if (configJson != null) {
             try {
@@ -2208,19 +2344,29 @@ class OverlayService : Service() {
                 baseUrl = json.optString("baseUrl", "")
                 apiKey = json.optString("apiKey", "")
                 model = json.optString("model", "deepseek-chat")
-            } catch (e: Exception) {
-                // 解析失败，使用默认值
-            }
+                apiFormat = LlmApiFormat.fromValue(json.optString("apiFormat", "openai_chat_completions"))
+                temperature = json.optDouble("temperature", 0.7)
+                maxTokens = json.optInt("maxTokens", 2048)
+                timeoutSeconds = json.optInt("timeoutSeconds", 60)
+                streamEnabled = json.optBoolean("streamEnabled", true)
+            } catch (_: Exception) {}
         }
 
-        // 如果没有配置 API，返回提示
-        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
-            return "⚠️ 请先在设置中配置 LLM API\n\n打开主应用 → 设置 → LLM API 配置\n\n当前支持：DeepSeek、OpenAI、小米 MiMo 等"
-        }
+        return LlmRuntimeConfig(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            model = model,
+            apiFormat = apiFormat,
+            temperature = temperature,
+            maxTokens = maxTokens,
+            timeoutSeconds = timeoutSeconds,
+            streamEnabled = streamEnabled,
+        )
+    }
 
-        // 构建系统提示（注入当前模型信息）
+    private fun buildSystemPrompt(attachedApp: String, model: String): String {
         val modelInfo = getModelInfo(model)
-        val systemPrompt = buildString {
+        return buildString {
             append("你是 GG-AI 游戏内存修改助手。你当前使用的底层大模型是：$modelInfo。\n")
             append("当用户问你是什么模型时，你必须回答「$modelInfo」，这是你真实运行的底层模型。GG-AI 只是这个应用的名称，不是你的模型名称。不要编造其他模型名称。\n\n")
             append("## 核心行为准则\n")
@@ -2257,16 +2403,16 @@ class OverlayService : Service() {
             append("- 地址和数值用代码格式显示\n")
             append("- 用户要求画图时，直接输出 mermaid 代码块，不要多余文字")
         }
+    }
 
-        // 构建消息历史（最近 10 条）
+    private fun buildChatMessages(systemPrompt: String, userInput: String): JSONArray {
         val messages = JSONArray()
         messages.put(JSONObject().apply {
             put("role", "system")
             put("content", systemPrompt)
         })
 
-        val recentMessages = chatMessages.takeLast(10)
-        for ((sender, msg) in recentMessages) {
+        for ((sender, msg) in chatMessages.takeLast(10)) {
             val role = if (sender == "👤 我") "user" else "assistant"
             messages.put(JSONObject().apply {
                 put("role", role)
@@ -2274,24 +2420,23 @@ class OverlayService : Service() {
             })
         }
 
-        // 添加当前用户消息
         messages.put(JSONObject().apply {
             put("role", "user")
             put("content", userInput)
         })
+        return messages
+    }
 
-        // 发送 HTTP 请求
-        val url = URL("${baseUrl.trimEnd('/')}/chat/completions")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer $apiKey")
-        conn.doOutput = true
-        conn.connectTimeout = 30000
-        conn.readTimeout = 60000
+    private fun ensureLlmConfigured(config: LlmRuntimeConfig): String? {
+        return if (config.baseUrl.isEmpty() || config.apiKey.isEmpty()) {
+            "⚠️ 请先在设置中配置 LLM API\n\n打开主应用 → 设置 → LLM API 配置\n\n当前支持：DeepSeek、OpenAI、小米 MiMo、Anthropic 等"
+        } else {
+            null
+        }
+    }
 
-        // 定义工具
-        val tools = JSONArray().apply {
+    private fun buildToolDefinitions(): JSONArray {
+        return JSONArray().apply {
             put(JSONObject().apply {
                 put("type", "function")
                 put("function", JSONObject().apply {
@@ -2368,9 +2513,7 @@ class OverlayService : Service() {
                         put("properties", JSONObject().apply {
                             put("addresses", JSONObject().apply {
                                 put("type", "array")
-                                put("items", JSONObject().apply {
-                                    put("type", "string")
-                                })
+                                put("items", JSONObject().apply { put("type", "string") })
                                 put("description", "上一步得到的地址列表，如 ['0x1234','0x5678']")
                             })
                             put("value", JSONObject().apply {
@@ -2416,14 +2559,8 @@ class OverlayService : Service() {
                     put("parameters", JSONObject().apply {
                         put("type", "object")
                         put("properties", JSONObject().apply {
-                            put("address", JSONObject().apply {
-                                put("type", "string")
-                                put("description", "内存地址，十六进制如'0x12345678'")
-                            })
-                            put("value", JSONObject().apply {
-                                put("type", "string")
-                                put("description", "要写入的值")
-                            })
+                            put("address", JSONObject().apply { put("type", "string"); put("description", "内存地址，十六进制如'0x12345678'") })
+                            put("value", JSONObject().apply { put("type", "string"); put("description", "要写入的值") })
                             put("type", JSONObject().apply {
                                 put("type", "string")
                                 put("description", "数据类型")
@@ -2442,12 +2579,8 @@ class OverlayService : Service() {
                     put("parameters", JSONObject().apply {
                         put("type", "object")
                         put("properties", JSONObject().apply {
-                            put("address", JSONObject().apply {
-                                put("type", "string")
-                            })
-                            put("value", JSONObject().apply {
-                                put("type", "string")
-                            })
+                            put("address", JSONObject().apply { put("type", "string") })
+                            put("value", JSONObject().apply { put("type", "string") })
                             put("type", JSONObject().apply {
                                 put("type", "string")
                                 put("enum", JSONArray().apply { put("dword"); put("float"); put("double"); put("byte"); put("word"); put("qword") })
@@ -2465,9 +2598,7 @@ class OverlayService : Service() {
                     put("parameters", JSONObject().apply {
                         put("type", "object")
                         put("properties", JSONObject().apply {
-                            put("address", JSONObject().apply {
-                                put("type", "string")
-                            })
+                            put("address", JSONObject().apply { put("type", "string") })
                         })
                         put("required", JSONArray().apply { put("address") })
                     })
@@ -2492,97 +2623,207 @@ class OverlayService : Service() {
                     put("parameters", JSONObject().apply {
                         put("type", "object")
                         put("properties", JSONObject().apply {
-                            put("address", JSONObject().apply {
-                                put("type", "string")
-                            })
-                            put("range", JSONObject().apply {
-                                put("type", "integer")
-                                put("description", "前后分析范围，默认 256 字节")
-                            })
+                            put("address", JSONObject().apply { put("type", "string") })
+                            put("range", JSONObject().apply { put("type", "integer"); put("description", "前后分析范围，默认 256 字节") })
                         })
                         put("required", JSONArray().apply { put("address") })
                     })
                 })
             })
         }
+    }
+
+    private fun callLlmApi(userInput: String, attachedApp: String): String {
+        val config = readLlmConfig()
+        ensureLlmConfigured(config)?.let { return it }
+
+        val systemPrompt = buildSystemPrompt(attachedApp, config.model)
+        val messages = buildChatMessages(systemPrompt, userInput)
+
+        return when (config.apiFormat) {
+            LlmApiFormat.OPENAI_CHAT_COMPLETIONS -> callOpenAiChatCompletion(config, messages)
+            LlmApiFormat.OPENAI_RESPONSES -> callResponsesApi(config, systemPrompt, messages)
+            LlmApiFormat.ANTHROPIC_MESSAGES -> callAnthropicApi(config, systemPrompt, messages)
+        }
+    }
+
+    private fun callOpenAiChatCompletion(
+        config: LlmRuntimeConfig,
+        messages: JSONArray,
+        round: Int = 0,
+    ): String {
+        if (round > 4) return "❌ 工具调用轮次过多，已停止"
 
         val requestBody = JSONObject().apply {
-            put("model", model)
+            put("model", config.model)
             put("messages", messages)
-            put("tools", tools)
-            put("temperature", 0.7)
-            put("max_tokens", 2048)
+            put("tools", buildToolDefinitions())
+            put("tool_choice", "auto")
+            put("temperature", config.temperature)
+            put("max_tokens", config.maxTokens)
         }
 
-        // 发送请求并获取响应
-        val responseText = doHttpPost(url, apiKey, requestBody)
-        val responseJson = JSONObject(responseText)
-        val choices = responseJson.getJSONArray("choices")
-        if (choices.length() == 0) return "❌ 未收到 AI 回复"
+        val responseJson = JSONObject(
+            doHttpJsonRequest("${config.baseUrl.trimEnd('/')}/chat/completions", config, requestBody)
+        )
+        val message = responseJson.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?: return "❌ 未收到 AI 回复"
 
-        val msg = choices.getJSONObject(0).getJSONObject("message")
-
-        // 检查是否有工具调用
-        if (msg.has("tool_calls") && !msg.isNull("tool_calls")) {
-            // 将 assistant 消息（含 tool_calls）加入消息列表
-            messages.put(msg)
-
-            val toolCalls = msg.getJSONArray("tool_calls")
-            for (i in 0 until toolCalls.length()) {
-                val toolCall = toolCalls.getJSONObject(i)
-                val callId = toolCall.getString("id")
-                val func = toolCall.getJSONObject("function")
-                val funcName = func.getString("name")
-                val funcArgs = JSONObject(func.getString("arguments"))
-
-                val result = executeToolCall(funcName, funcArgs)
-
+        val toolCalls = extractOpenAiToolCalls(message)
+        if (toolCalls.isNotEmpty()) {
+            messages.put(message)
+            for (toolCall in toolCalls) {
+                val result = executeToolCall(toolCall.name, toolCall.arguments)
                 messages.put(JSONObject().apply {
                     put("role", "tool")
-                    put("tool_call_id", callId)
+                    put("tool_call_id", toolCall.id)
                     put("content", result)
                 })
             }
-
-            // 用工具结果再次调用 LLM
-            val finalRequestBody = JSONObject().apply {
-                put("model", model)
-                put("messages", messages)
-                put("temperature", 0.7)
-                put("max_tokens", 2048)
-            }
-            val finalResponseText = doHttpPost(url, apiKey, finalRequestBody)
-            val finalJson = JSONObject(finalResponseText)
-            val finalChoices = finalJson.getJSONArray("choices")
-            if (finalChoices.length() > 0) {
-                return finalChoices.getJSONObject(0).getJSONObject("message").getString("content")
-            }
-            return "❌ 未收到 AI 回复"
+            return callOpenAiChatCompletion(config, messages, round + 1)
         }
 
-        return msg.optString("content", "❌ 未收到 AI 回复")
+        return extractOpenAiMessageText(message)
     }
 
-    private fun doHttpPost(url: URL, apiKey: String, body: JSONObject): String {
-        val conn = url.openConnection() as HttpURLConnection
+    private fun callResponsesApi(
+        config: LlmRuntimeConfig,
+        instructions: String,
+        messages: JSONArray,
+    ): String {
+        val input = buildResponsesInput(messages)
+        return callResponsesApiWithInput(config, instructions, input)
+    }
+
+    private fun callResponsesApiWithInput(
+        config: LlmRuntimeConfig,
+        instructions: String,
+        input: JSONArray,
+        round: Int = 0,
+    ): String {
+        if (round > 4) return "❌ 工具调用轮次过多，已停止"
+
+        val requestBody = JSONObject().apply {
+            put("model", config.model)
+            put("instructions", instructions)
+            put("input", input)
+            put("tools", buildResponsesToolDefinitions())
+            put("tool_choice", "auto")
+            put("temperature", config.temperature)
+            put("max_output_tokens", config.maxTokens)
+        }
+
+        val responseJson = JSONObject(
+            doHttpJsonRequest("${config.baseUrl.trimEnd('/')}/responses", config, requestBody)
+        )
+        val toolCalls = extractResponsesToolCalls(responseJson)
+        if (toolCalls.isNotEmpty()) {
+            val nextInput = JSONArray()
+            appendJsonArray(input, nextInput)
+            appendJsonArray(responseJson.optJSONArray("output"), nextInput)
+            for (toolCall in toolCalls) {
+                val result = executeToolCall(toolCall.name, toolCall.arguments)
+                nextInput.put(JSONObject().apply {
+                    put("type", "function_call_output")
+                    put("call_id", toolCall.id)
+                    put("output", result)
+                })
+            }
+            return callResponsesApiWithInput(config, instructions, nextInput, round + 1)
+        }
+
+        return extractResponsesText(responseJson)
+    }
+
+    private fun callAnthropicApi(
+        config: LlmRuntimeConfig,
+        systemPrompt: String,
+        messages: JSONArray,
+    ): String {
+        val anthropicMessages = buildAnthropicMessages(messages)
+        return callAnthropicApiWithMessages(config, systemPrompt, anthropicMessages)
+    }
+
+    private fun callAnthropicApiWithMessages(
+        config: LlmRuntimeConfig,
+        systemPrompt: String,
+        messages: JSONArray,
+        round: Int = 0,
+    ): String {
+        if (round > 4) return "❌ 工具调用轮次过多，已停止"
+
+        val requestBody = JSONObject().apply {
+            put("model", config.model)
+            put("system", systemPrompt)
+            put("messages", messages)
+            put("tools", buildAnthropicToolDefinitions())
+            put("temperature", config.temperature)
+            put("max_tokens", config.maxTokens)
+        }
+
+        val responseJson = JSONObject(
+            doHttpJsonRequest("${config.baseUrl.trimEnd('/')}/messages", config, requestBody)
+        )
+        val content = responseJson.optJSONArray("content") ?: JSONArray()
+        val toolCalls = extractAnthropicToolCalls(content)
+        if (toolCalls.isNotEmpty()) {
+            val nextMessages = JSONArray()
+            appendJsonArray(messages, nextMessages)
+            nextMessages.put(JSONObject().apply {
+                put("role", "assistant")
+                put("content", content)
+            })
+
+            val toolResults = JSONArray()
+            for (toolCall in toolCalls) {
+                val result = executeToolCall(toolCall.name, toolCall.arguments)
+                toolResults.put(JSONObject().apply {
+                    put("type", "tool_result")
+                    put("tool_use_id", toolCall.id)
+                    put("content", result)
+                })
+            }
+            nextMessages.put(JSONObject().apply {
+                put("role", "user")
+                put("content", toolResults)
+            })
+            return callAnthropicApiWithMessages(config, systemPrompt, nextMessages, round + 1)
+        }
+
+        return extractAnthropicText(content)
+    }
+
+    private fun doHttpJsonRequest(
+        endpoint: String,
+        config: LlmRuntimeConfig,
+        body: JSONObject,
+    ): String {
+        val conn = URL(endpoint).openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        when (config.apiFormat) {
+            LlmApiFormat.ANTHROPIC_MESSAGES -> {
+                conn.setRequestProperty("x-api-key", config.apiKey)
+                conn.setRequestProperty("anthropic-version", "2023-06-01")
+            }
+            else -> conn.setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+        }
         conn.doOutput = true
-        conn.connectTimeout = 30000
-        conn.readTimeout = 60000
-        val writer = OutputStreamWriter(conn.outputStream, Charsets.UTF_8)
-        writer.write(body.toString())
-        writer.flush()
-        writer.close()
+        conn.connectTimeout = config.timeoutSeconds * 1000
+        conn.readTimeout = (config.timeoutSeconds * 2) * 1000
+        OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(body.toString())
+            writer.flush()
+        }
         val code = conn.responseCode
-        if (code != 200) {
+        if (code !in 200..299) {
             val err = conn.errorStream?.bufferedReader()?.readText() ?: "未知错误"
+            conn.disconnect()
             throw Exception("HTTP $code: $err")
         }
-        val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
-        val text = reader.readText()
-        reader.close()
+        val text = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { it.readText() }
         conn.disconnect()
         return text
     }
@@ -2609,96 +2850,317 @@ class OverlayService : Service() {
     }
 
     // 流式调用 LLM API
-    private fun callLlmApiStream(userInput: String, attachedApp: String, onChunk: (String) -> Unit) {
-        val configPrefs = getSharedPreferences("gg_llm_config", Context.MODE_PRIVATE)
-        val configJson = configPrefs.getString("config", null)
-
-        var baseUrl = ""
-        var apiKey = ""
-        var model = "deepseek-chat"
-
-        if (configJson != null) {
-            try {
-                val json = JSONObject(configJson)
-                baseUrl = json.optString("baseUrl", "")
-                apiKey = json.optString("apiKey", "")
-                model = json.optString("model", "deepseek-chat")
-            } catch (_: Exception) {}
+    private fun callLlmApiStream(userInput: String, attachedApp: String, onChunk: (String) -> Unit): String {
+        val config = readLlmConfig()
+        ensureLlmConfigured(config)?.let {
+            onChunk(it)
+            return it
         }
 
-        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
-            onChunk("⚠️ 请先在设置中配置 LLM API")
-            return
+        val systemPrompt = buildSystemPrompt(attachedApp, config.model)
+        val messages = buildChatMessages(systemPrompt, userInput)
+
+        if (config.apiFormat != LlmApiFormat.OPENAI_CHAT_COMPLETIONS) {
+            val result = callLlmApi(userInput, attachedApp)
+            if (result.isNotEmpty()) onChunk(result)
+            return result
         }
 
-        val modelInfo = getModelInfo(model)
-        val systemPrompt = buildString {
-            append("你是 GG-AI 游戏内存修改助手。你当前使用的底层大模型是：$modelInfo。\n")
-            append("当用户问你是什么模型时，你必须回答「$modelInfo」。GG-AI 只是应用名称，不是模型名称。\n\n")
-            append("当用户要求搜索/读取/修改内存时，调用 search_memory/read_memory/write_memory 工具执行真实操作，绝对不要模拟结果。\n")
-            append("只有用户明确要求写脚本时才输出 Lua 脚本（luaj-jse-3.0.2.jar），用 ```lua 包裹。\n\n")
-            if (attachedApp.isNotEmpty()) append("当前已附加游戏进程: $attachedApp\n")
-            append("\n渲染支持：客户端支持 Markdown、LaTeX 公式（${'$'}...${'$'} / ${'$'}${'$'}...${'$'}${'$'}）和 Mermaid 图表。")
-            append("用户要求画图时，必须直接输出 ```mermaid 代码块，不要解释。")
-            append("Mermaid 版本 8.14.0，只支持 graph/sequenceDiagram/classDiagram/stateDiagram/gantt/pie，不要用 flowchart/mindmap/timeline 等新类型，不要用 %%{init}%% 指令，特殊字符用双引号包裹。")
-            append("\n使用简洁友好的中文回复，操作步骤用编号列出。")
-        }
+        return callOpenAiChatCompletionStream(config, messages, onChunk)
+    }
 
-        val messages = JSONArray()
-        messages.put(JSONObject().apply { put("role", "system"); put("content", systemPrompt) })
-        for ((sender, msg) in chatMessages.takeLast(10)) {
-            messages.put(JSONObject().apply { put("role", if (sender == "👤 我") "user" else "assistant"); put("content", msg) })
-        }
-        messages.put(JSONObject().apply { put("role", "user"); put("content", userInput) })
+    private fun callOpenAiChatCompletionStream(
+        config: LlmRuntimeConfig,
+        messages: JSONArray,
+        onChunk: (String) -> Unit,
+        round: Int = 0,
+    ): String {
+        if (round > 4) return "❌ 工具调用轮次过多，已停止"
 
-        val url = URL("${baseUrl.trimEnd('/')}/chat/completions")
-        val conn = url.openConnection() as HttpURLConnection
+        val conn = URL("${config.baseUrl.trimEnd('/')}/chat/completions").openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.setRequestProperty("Authorization", "Bearer ${config.apiKey}")
         conn.doOutput = true
-        conn.connectTimeout = 30000
-        conn.readTimeout = 120000
+        conn.connectTimeout = config.timeoutSeconds * 1000
+        conn.readTimeout = (config.timeoutSeconds * 2) * 1000
 
         val requestBody = JSONObject().apply {
-            put("model", model)
+            put("model", config.model)
             put("messages", messages)
-            put("temperature", 0.7)
-            put("max_tokens", 2048)
+            put("tools", buildToolDefinitions())
+            put("tool_choice", "auto")
+            put("temperature", config.temperature)
+            put("max_tokens", config.maxTokens)
             put("stream", true)
         }
 
-        val writer = OutputStreamWriter(conn.outputStream, Charsets.UTF_8)
-        writer.write(requestBody.toString())
-        writer.flush()
-        writer.close()
+        OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(requestBody.toString())
+            writer.flush()
+        }
 
         val responseCode = conn.responseCode
-        if (responseCode != 200) {
+        if (responseCode !in 200..299) {
             val errorStream = conn.errorStream?.bufferedReader()?.readText() ?: "未知错误"
+            conn.disconnect()
             throw Exception("HTTP $responseCode: $errorStream")
         }
 
-        val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
-        var line: String?
-        while (reader.readLine().also { line = it } != null) {
-            val l = line!!.trim()
-            if (l.isEmpty() || !l.startsWith("data: ")) continue
-            val data = l.substring(6)
-            if (data == "[DONE]") break
-            try {
-                val json = JSONObject(data)
-                val delta = json.getJSONArray("choices").getJSONObject(0).getJSONObject("delta")
-                if (delta.has("content") && !delta.isNull("content")) {
-                    val content = delta.getString("content")
-                    if (content.isNotEmpty() && content != "null") {
-                        onChunk(content)
+        val text = StringBuilder()
+        val pendingToolCalls = linkedMapOf<Int, PendingToolCall>()
+
+        BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { reader ->
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val chunk = line!!.trim()
+                if (chunk.isEmpty() || !chunk.startsWith("data: ")) continue
+                val data = chunk.substring(6)
+                if (data == "[DONE]") break
+                try {
+                    val json = JSONObject(data)
+                    val delta = json.optJSONArray("choices")
+                        ?.optJSONObject(0)
+                        ?.optJSONObject("delta")
+                        ?: continue
+
+                    if (delta.has("content") && !delta.isNull("content")) {
+                        val content = delta.optString("content", "")
+                        if (content.isNotEmpty() && content != "null") {
+                            text.append(content)
+                            onChunk(content)
+                        }
                     }
-                }
-            } catch (_: Exception) {}
+
+                    val toolCalls = delta.optJSONArray("tool_calls")
+                    if (toolCalls != null) {
+                        for (i in 0 until toolCalls.length()) {
+                            val item = toolCalls.optJSONObject(i) ?: continue
+                            val index = item.optInt("index", i)
+                            val pending = pendingToolCalls.getOrPut(index) { PendingToolCall() }
+                            val id = item.optString("id", "")
+                            if (id.isNotEmpty()) pending.id = id
+                            val function = item.optJSONObject("function")
+                            if (function != null) {
+                                val name = function.optString("name", "")
+                                if (name.isNotEmpty()) pending.name = name
+                                val argsDelta = function.optString("arguments", "")
+                                if (argsDelta.isNotEmpty()) pending.arguments.append(argsDelta)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
         }
-        reader.close()
         conn.disconnect()
+
+        val toolCallSpecs = pendingToolCalls.entries
+            .sortedBy { it.key }
+            .mapNotNull { (index, pending) ->
+                if (pending.name.isBlank()) null
+                else ToolCallSpec(
+                    id = if (pending.id.isNotBlank()) pending.id else "call_$index",
+                    name = pending.name,
+                    arguments = parseToolArguments(pending.arguments.toString())
+                )
+            }
+
+        if (toolCallSpecs.isNotEmpty()) {
+            messages.put(buildOpenAiAssistantToolMessage(text.toString(), toolCallSpecs))
+            for (toolCall in toolCallSpecs) {
+                val result = executeToolCall(toolCall.name, toolCall.arguments)
+                messages.put(JSONObject().apply {
+                    put("role", "tool")
+                    put("tool_call_id", toolCall.id)
+                    put("content", result)
+                })
+            }
+            return callOpenAiChatCompletionStream(config, messages, onChunk, round + 1)
+        }
+
+        return if (text.isNotBlank()) text.toString() else "❌ 未收到 AI 回复"
+    }
+
+    private fun extractOpenAiToolCalls(message: JSONObject): List<ToolCallSpec> {
+        val toolCalls = message.optJSONArray("tool_calls") ?: return emptyList()
+        val result = mutableListOf<ToolCallSpec>()
+        for (i in 0 until toolCalls.length()) {
+            val item = toolCalls.optJSONObject(i) ?: continue
+            val function = item.optJSONObject("function") ?: continue
+            val name = function.optString("name", "")
+            if (name.isBlank()) continue
+            result.add(
+                ToolCallSpec(
+                    id = item.optString("id", "call_$i"),
+                    name = name,
+                    arguments = parseToolArguments(function.optString("arguments", "{}"))
+                )
+            )
+        }
+        return result
+    }
+
+    private fun extractOpenAiMessageText(message: JSONObject): String {
+        val content = message.optString("content", "").trim()
+        if (content.isNotEmpty()) return content
+        val reasoning = message.optString("reasoning_content", "").trim()
+        return if (reasoning.isNotEmpty()) "⚠️ 模型仅返回推理片段，请提高 max tokens 后重试" else "❌ 未收到 AI 回复"
+    }
+
+    private fun buildResponsesToolDefinitions(): JSONArray {
+        val tools = buildToolDefinitions()
+        val result = JSONArray()
+        for (i in 0 until tools.length()) {
+            val item = tools.optJSONObject(i) ?: continue
+            val function = item.optJSONObject("function") ?: continue
+            result.put(JSONObject().apply {
+                put("type", "function")
+                put("name", function.optString("name"))
+                put("description", function.optString("description"))
+                put("parameters", function.optJSONObject("parameters") ?: JSONObject())
+            })
+        }
+        return result
+    }
+
+    private fun buildAnthropicToolDefinitions(): JSONArray {
+        val tools = buildToolDefinitions()
+        val result = JSONArray()
+        for (i in 0 until tools.length()) {
+            val item = tools.optJSONObject(i) ?: continue
+            val function = item.optJSONObject("function") ?: continue
+            result.put(JSONObject().apply {
+                put("name", function.optString("name"))
+                put("description", function.optString("description"))
+                put("input_schema", function.optJSONObject("parameters") ?: JSONObject())
+            })
+        }
+        return result
+    }
+
+    private fun buildResponsesInput(messages: JSONArray): JSONArray {
+        val input = JSONArray()
+        for (i in 0 until messages.length()) {
+            val item = messages.optJSONObject(i) ?: continue
+            val role = item.optString("role", "")
+            if (role == "system") continue
+            input.put(JSONObject().apply {
+                put("role", role)
+                put("content", item.optString("content", ""))
+            })
+        }
+        return input
+    }
+
+    private fun buildAnthropicMessages(messages: JSONArray): JSONArray {
+        val anthropicMessages = JSONArray()
+        for (i in 0 until messages.length()) {
+            val item = messages.optJSONObject(i) ?: continue
+            val role = item.optString("role", "")
+            if (role == "system") continue
+            anthropicMessages.put(JSONObject().apply {
+                put("role", role)
+                put("content", item.optString("content", ""))
+            })
+        }
+        return anthropicMessages
+    }
+
+    private fun extractResponsesToolCalls(responseJson: JSONObject): List<ToolCallSpec> {
+        val output = responseJson.optJSONArray("output") ?: return emptyList()
+        val result = mutableListOf<ToolCallSpec>()
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            if (item.optString("type") != "function_call") continue
+            result.add(
+                ToolCallSpec(
+                    id = item.optString("call_id", item.optString("id", "call_$i")),
+                    name = item.optString("name", ""),
+                    arguments = parseToolArguments(item.optString("arguments", "{}"))
+                )
+            )
+        }
+        return result.filter { it.name.isNotBlank() }
+    }
+
+    private fun extractResponsesText(responseJson: JSONObject): String {
+        val outputText = responseJson.optString("output_text", "").trim()
+        if (outputText.isNotEmpty()) return outputText
+        val output = responseJson.optJSONArray("output") ?: return "❌ 未收到 AI 回复"
+        val text = StringBuilder()
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            if (item.optString("type") != "message") continue
+            val content = item.optJSONArray("content") ?: continue
+            for (j in 0 until content.length()) {
+                val block = content.optJSONObject(j) ?: continue
+                if (block.optString("type") == "output_text" || block.optString("type") == "text") {
+                    text.append(block.optString("text", ""))
+                }
+            }
+        }
+        return if (text.isNotBlank()) text.toString() else "❌ 未收到 AI 回复"
+    }
+
+    private fun extractAnthropicToolCalls(content: JSONArray): List<ToolCallSpec> {
+        val result = mutableListOf<ToolCallSpec>()
+        for (i in 0 until content.length()) {
+            val item = content.optJSONObject(i) ?: continue
+            if (item.optString("type") != "tool_use") continue
+            result.add(
+                ToolCallSpec(
+                    id = item.optString("id", "tool_$i"),
+                    name = item.optString("name", ""),
+                    arguments = item.optJSONObject("input") ?: JSONObject()
+                )
+            )
+        }
+        return result.filter { it.name.isNotBlank() }
+    }
+
+    private fun extractAnthropicText(content: JSONArray): String {
+        val text = StringBuilder()
+        for (i in 0 until content.length()) {
+            val item = content.optJSONObject(i) ?: continue
+            if (item.optString("type") == "text") {
+                text.append(item.optString("text", ""))
+            }
+        }
+        return if (text.isNotBlank()) text.toString() else "❌ 未收到 AI 回复"
+    }
+
+    private fun buildOpenAiAssistantToolMessage(content: String, toolCalls: List<ToolCallSpec>): JSONObject {
+        return JSONObject().apply {
+            put("role", "assistant")
+            put("content", content)
+            put("tool_calls", JSONArray().apply {
+                toolCalls.forEach { toolCall ->
+                    put(JSONObject().apply {
+                        put("id", toolCall.id)
+                        put("type", "function")
+                        put("function", JSONObject().apply {
+                            put("name", toolCall.name)
+                            put("arguments", toolCall.arguments.toString())
+                        })
+                    })
+                }
+            })
+        }
+    }
+
+    private fun appendJsonArray(source: JSONArray?, target: JSONArray) {
+        if (source == null) return
+        for (i in 0 until source.length()) {
+            target.put(source.get(i))
+        }
+    }
+
+    private fun parseToolArguments(raw: String): JSONObject {
+        return try {
+            if (raw.isBlank()) JSONObject() else JSONObject(raw)
+        } catch (_: Exception) {
+            JSONObject()
+        }
     }
 
     // 根据模型名称返回公司+版本信息

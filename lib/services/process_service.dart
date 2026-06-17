@@ -34,8 +34,10 @@ class ProcessService {
   bool get isAttached => _attachedProcess != null;
 
   /// 获取运行中的进程列表
-  Future<List<ProcessInfo>> getProcessList() async {
-    final processes = await _bridge.getProcessList();
+  Future<List<ProcessInfo>> getProcessList({bool includeSystem = false}) async {
+    final processes = await _bridge.getProcessList(
+      includeSystem: includeSystem,
+    );
     _processListController.add(processes);
     return processes;
   }

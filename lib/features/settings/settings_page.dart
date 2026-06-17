@@ -35,7 +35,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   String _selectedPreset = 'custom';
   bool _isTesting = false;
+  bool _isFetchingModels = false;
   String? _testResult;
+  LlmApiFormat _selectedApiFormat = LlmApiFormat.openAiChatCompletions;
+  List<String> _availableModels = const [];
   AiReadDepth _selectedReadDepth = AiReadDepth.sample50;
 
   /// 自定义预设列表（从存储加载）
@@ -54,6 +57,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _maxTokensController = TextEditingController(
       text: config.maxTokens.toString(),
     );
+    _selectedApiFormat = config.apiFormat;
+    _availableModels = List<String>.from(config.availableModels);
 
     // 加载存储服务
     final storage = ref.read(storageServiceProvider);
@@ -125,14 +130,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // 检查内置预设
     for (final entry in LlmConfig.presets.entries) {
       if (entry.value.baseUrl == config.baseUrl &&
-          entry.value.model == config.model) {
+          entry.value.model == config.model &&
+          entry.value.apiFormat == config.apiFormat) {
         return entry.key;
       }
     }
     // 检查自定义预设
     for (final entry in _customPresets.entries) {
       if (entry.value.baseUrl == config.baseUrl &&
-          entry.value.model == config.model) {
+          entry.value.model == config.model &&
+          entry.value.apiFormat == config.apiFormat) {
         return entry.key;
       }
     }
@@ -154,14 +161,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (preset != null) {
       // 保存当前预设的 apiKey
       _saveCurrentPresetApiKey();
+      final storage = ref.read(storageServiceProvider);
+      final savedKey = storage.getSetting('preset_key_$presetName') as String?;
       setState(() {
         _selectedPreset = presetName;
         _baseUrlController.text = preset.baseUrl;
         _modelController.text = preset.model;
+        _selectedApiFormat = preset.apiFormat;
+        _availableModels = List<String>.from(preset.availableModels);
         // 恢复该预设保存的 apiKey
-        final storage = ref.read(storageServiceProvider);
-        final savedKey =
-            storage.getSetting('preset_key_$presetName') as String?;
         _apiKeyController.text = savedKey ?? preset.apiKey;
       });
     }
@@ -247,7 +255,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               }
 
               final keyId = 'custom_$name';
-              final config = LlmConfig(baseUrl: url, apiKey: key, model: model);
+              final config = LlmConfig(
+                baseUrl: url,
+                apiKey: key,
+                model: model,
+                apiFormat: _selectedApiFormat,
+              );
 
               setState(() {
                 _customPresets[keyId] = config;
@@ -255,6 +268,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 _baseUrlController.text = url;
                 _apiKeyController.text = key;
                 _modelController.text = model;
+                _availableModels = const [];
               });
 
               _saveCustomPresets();
@@ -273,8 +287,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       baseUrl: _baseUrlController.text.trim(),
       apiKey: _apiKeyController.text.trim(),
       model: _modelController.text.trim(),
+      apiFormat: _selectedApiFormat,
       temperature: double.tryParse(_temperatureController.text) ?? 0.7,
       maxTokens: int.tryParse(_maxTokensController.text) ?? 4096,
+      availableModels: _availableModels,
     );
 
     ref.read(llmConfigProvider.notifier).state = config;
@@ -301,8 +317,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         'baseUrl': config.baseUrl,
         'apiKey': config.apiKey,
         'model': config.model,
+        'apiFormat': config.apiFormat.value,
         'temperature': config.temperature,
         'maxTokens': config.maxTokens,
+        'streamEnabled': config.streamEnabled,
+        'timeoutSeconds': config.timeoutSeconds,
+        'availableModels': config.availableModels,
       });
     } catch (e) {
       // 忽略错误
@@ -328,29 +348,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/chat/completions');
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $apiKey',
-            },
-            body: jsonEncode({
-              'model': model,
-              'messages': [
-                {'role': 'user', 'content': 'Hi'},
-              ],
-              'max_tokens': 5,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+      final response = await _sendConnectionProbe(
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
-        if (json['choices'] != null) {
+        if (_responseLooksValid(json)) {
           setState(() {
-            _testResult = '✅ 连接成功！模型: $model';
+            _testResult =
+                '✅ 连接成功！模型: $model | 协议: ${_selectedApiFormat.label}';
           });
         } else {
           setState(() {
@@ -384,6 +393,204 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } finally {
       setState(() {
         _isTesting = false;
+      });
+    }
+  }
+
+  Future<void> _fetchModels() async {
+    final baseUrl = _baseUrlController.text.trim();
+    final apiKey = _apiKeyController.text.trim();
+    if (baseUrl.isEmpty || apiKey.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先填写 API 地址和密钥')));
+      return;
+    }
+
+    setState(() {
+      _isFetchingModels = true;
+      _testResult = null;
+    });
+
+    try {
+      final response = await _fetchModelList(
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+      ).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+
+      final models = _extractModelIds(jsonDecode(response.body));
+      if (models.isEmpty) {
+        throw Exception('接口未返回可识别的模型列表');
+      }
+
+      setState(() {
+        _availableModels = models;
+        if (_modelController.text.trim().isEmpty ||
+            !models.contains(_modelController.text.trim())) {
+          _modelController.text = models.first;
+        }
+        _testResult = '✅ 已获取 ${models.length} 个模型';
+      });
+    } catch (e) {
+      setState(() {
+        _testResult = '❌ 获取模型失败: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFetchingModels = false;
+        });
+      }
+    }
+  }
+
+  Future<http.Response> _fetchModelList({
+    required String baseUrl,
+    required String apiKey,
+  }) {
+    return http.get(
+      Uri.parse('$baseUrl/models'),
+      headers: _buildHeaders(apiKey),
+    );
+  }
+
+  Future<http.Response> _sendConnectionProbe({
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) {
+    final endpoint = switch (_selectedApiFormat) {
+      LlmApiFormat.openAiChatCompletions => '$baseUrl/chat/completions',
+      LlmApiFormat.openAiResponses => '$baseUrl/responses',
+      LlmApiFormat.anthropicMessages => '$baseUrl/messages',
+    };
+    return http.post(
+      Uri.parse(endpoint),
+      headers: _buildHeaders(apiKey),
+      body: jsonEncode(_buildProbeBody(model)),
+    );
+  }
+
+  Map<String, String> _buildHeaders(String apiKey) {
+    return switch (_selectedApiFormat) {
+      LlmApiFormat.anthropicMessages => {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      _ => {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+      },
+    };
+  }
+
+  Map<String, dynamic> _buildProbeBody(String model) {
+    return switch (_selectedApiFormat) {
+      LlmApiFormat.openAiResponses => {
+        'model': model,
+        'input': 'Hi',
+        'max_output_tokens': 16,
+      },
+      LlmApiFormat.anthropicMessages => {
+        'model': model,
+        'max_tokens': 16,
+        'messages': [
+          {'role': 'user', 'content': 'Hi'},
+        ],
+      },
+      LlmApiFormat.openAiChatCompletions => {
+        'model': model,
+        'messages': [
+          {'role': 'user', 'content': 'Hi'},
+        ],
+        'max_tokens': 16,
+      },
+    };
+  }
+
+  bool _responseLooksValid(dynamic json) {
+    if (json is! Map<String, dynamic>) return false;
+    return switch (_selectedApiFormat) {
+      LlmApiFormat.openAiChatCompletions => json['choices'] != null,
+      LlmApiFormat.openAiResponses =>
+        json['output'] != null || json['output_text'] != null,
+      LlmApiFormat.anthropicMessages => json['content'] != null,
+    };
+  }
+
+  List<String> _extractModelIds(dynamic body) {
+    if (body is Map<String, dynamic> && body['data'] is List) {
+      return (body['data'] as List)
+          .map((item) => (item as Map)['id']?.toString() ?? '')
+          .where((item) => item.isNotEmpty)
+          .toList();
+    }
+    if (body is Map<String, dynamic> && body['models'] is List) {
+      return (body['models'] as List)
+          .map((item) => item.toString())
+          .where((item) => item.isNotEmpty)
+          .toList();
+    }
+    return const [];
+  }
+
+  Future<void> _showModelPicker() async {
+    if (_availableModels.isEmpty) return;
+
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        final current = _modelController.text.trim();
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.72,
+            child: Column(
+              children: [
+                const ListTile(
+                  leading: Icon(Icons.smart_toy),
+                  title: Text('选择模型'),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _availableModels.length,
+                    itemBuilder: (context, index) {
+                      final model = _availableModels[index];
+                      final isCurrent = model == current;
+                      return ListTile(
+                        dense: true,
+                        title: Text(
+                          model,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: isCurrent
+                            ? const Icon(
+                                Icons.check_circle,
+                                color: Color(0xFF8D6E63),
+                              )
+                            : null,
+                        onTap: () => Navigator.pop(context, model),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected != null && mounted) {
+      setState(() {
+        _modelController.text = selected;
       });
     }
   }
@@ -434,6 +641,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(height: 12),
 
+          DropdownButtonFormField<LlmApiFormat>(
+            initialValue: _selectedApiFormat,
+            decoration: const InputDecoration(
+              labelText: '接口协议',
+              prefixIcon: Icon(Icons.hub, size: 16),
+            ),
+            items: LlmApiFormat.values
+                .map(
+                  (format) => DropdownMenuItem<LlmApiFormat>(
+                    value: format,
+                    child: Text(format.label),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() {
+                _selectedApiFormat = value;
+                _availableModels = const [];
+              });
+            },
+          ),
+          const SizedBox(height: 12),
+
           // 模型名称
           TextField(
             controller: _modelController,
@@ -442,6 +673,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               hintText: 'deepseek-chat',
               prefixIcon: Icon(Icons.smart_toy, size: 16),
             ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _isFetchingModels ? null : _fetchModels,
+                  icon: _isFetchingModels
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_download_outlined),
+                  label: Text(_isFetchingModels ? '获取中...' : '获取模型'),
+                ),
+              ),
+              if (_availableModels.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _showModelPicker,
+                    icon: const Icon(Icons.list_alt_outlined),
+                    label: Text('选择模型(${_availableModels.length})'),
+                  ),
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: 12),
 
