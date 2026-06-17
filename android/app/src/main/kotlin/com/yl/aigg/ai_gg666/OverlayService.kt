@@ -3014,7 +3014,7 @@ mainMenu()""",
 
     // ==================== UI 工具 ====================
 
-    private fun menuBtn(text: String, iconRes: Int? = null, onClick: () -> Unit): LinearLayout {
+    private fun menuBtn(label: String, iconRes: Int? = null, onClick: () -> Unit): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -3034,19 +3034,19 @@ mainMenu()""",
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 addView(TextView(this@OverlayService).apply {
-                    this.text = text
+                    text = label
                     setTextColor(overlayTextPrimary)
                     textSize = 14f
                 })
                 addView(TextView(this@OverlayService).apply {
-                    text = "进入 ${text} 工具"
+                    text = "进入 ${label} 工具"
                     setTextColor(overlayTextSecondary)
                     textSize = 10f
                     setPadding(0, dp(3), 0, 0)
                 })
             })
             addView(TextView(this@OverlayService).apply {
-                text = "›"
+                this.text = "›"
                 setTextColor(overlayAccentStrong)
                 textSize = 18f
             })
