@@ -262,10 +262,10 @@ object LuaEngine {
         return result.get()
     }
 
-    private fun parseAddress(text: String): Int? {
+    private fun parseAddress(text: String): Long? {
         val trimmed = text.trim()
         val hex = trimmed.removePrefix("0x").removePrefix("0X")
-        return hex.toLongOrNull(16)?.toInt() ?: trimmed.toLongOrNull()?.toInt()
+        return hex.toLongOrNull(16) ?: trimmed.toLongOrNull()
     }
 
     private fun luaTypeToDataType(type: Int): String {
