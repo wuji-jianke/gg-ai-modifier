@@ -144,8 +144,9 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply { 
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = dp(200)
+            val prefs = getSharedPreferences("gg_overlay", Context.MODE_PRIVATE)
+            x = prefs.getInt("ball_x", 0)
+            y = prefs.getInt("ball_y", dp(200))
         }
 
         var ix = 0; var iy = 0; var tx = 0f; var ty = 0f; var dragging = false
@@ -155,6 +156,10 @@ class OverlayService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     if (kotlin.math.abs(e.rawX - tx) > 10 || kotlin.math.abs(e.rawY - ty) > 10) dragging = true
                     ballParams?.x = ix + (e.rawX - tx).toInt(); ballParams?.y = iy + (e.rawY - ty).toInt()
+                    getSharedPreferences("gg_overlay", Context.MODE_PRIVATE).edit()
+                        .putInt("ball_x", ballParams?.x ?: 0)
+                        .putInt("ball_y", ballParams?.y ?: dp(200))
+                        .apply()
                     try { wm?.updateViewLayout(ballView, ballParams) } catch (_: Exception) {}
                     true
                 }
@@ -2036,7 +2041,7 @@ class OverlayService : Service() {
             append("Lua 脚本规范（luaj-jse-3.0.2.jar 环境）：\n")
             append("- 使用 GG API：gg.searchNumber、gg.getResults、gg.editAll、gg.clearResults\n")
             append("- type 常量：gg.TYPE_DWORD、gg.TYPE_FLOAT、gg.TYPE_DOUBLE、gg.TYPE_BYTE、gg.TYPE_WORD、gg.TYPE_QWORD\n")
-            append("- UI：gg.toast、gg.alert、gg.prompt、gg.choice\n")
+            append("- UI：gg.toast、gg.alert、gg.prompt、gg.choice、gg.mainTabs、gg.viewText、gg.viewList、gg.viewPrompt、gg.viewSwitch、gg.viewWeb\n")
             append("- 用 ```lua 代码块包裹\n\n")
             if (attachedApp.isNotEmpty()) {
                 append("当前已附加游戏进程: $attachedApp\n")
