@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import '../../core/llm/llm_config.dart';
-import '../../core/llm/prompt_builder.dart';
+import '../../core/settings/ai_read_depth.dart';
 import '../../main.dart';
 
 /// LLM 配置 Provider

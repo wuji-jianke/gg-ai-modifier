@@ -23,13 +23,13 @@ class MainActivity : FlutterActivity() {
     private val OVERLAY_PERMISSION_REQUEST = 1234
     private val STORAGE_PERMISSION_REQUEST = 1235
     private val ALL_PERMISSIONS_REQUEST = 1236
-    private var pendingPage: String? = null
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         appContext = applicationContext
         
         // 初始化 MemoryEngine 的 Context
+        NativeToolApi.initialize(applicationContext)
         MemoryEngine.setContext(applicationContext)
     }
 
@@ -37,31 +37,12 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.yl.aigg/bridge")
-        
+
         // 首次启动时申请权限
         requestAllPermissionsOnFirstLaunch()
-
-        // 检查启动时是否有页面参数
-        val startPage = intent?.getStringExtra("page")
-        if (startPage != null) {
-            pendingPage = startPage
-        }
-        // 也检查 SharedPreferences
-        if (pendingPage == null) {
-            val prefs = getSharedPreferences("gg_overlay", Context.MODE_PRIVATE)
-            pendingPage = prefs.getString("pending_page", null)
-            prefs.edit().remove("pending_page").apply()
-        }
         
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
-                // 获取悬浮窗传来的页面参数
-                "getInitialPage" -> {
-                    val page = pendingPage
-                    pendingPage = null
-                    result.success(page)
-                }
-
                 // 进程管理（后台线程执行，避免阻塞 UI）
                 "getProcessList" -> {
                     Thread {
@@ -135,7 +116,7 @@ class MainActivity : FlutterActivity() {
                     }.start()
                 }
                 "filterResults" -> {
-                    val prevAddresses = (call.argument<List<Int>>("previousAddresses") ?: emptyList()).map { it.toLong() }
+                    val prevAddresses = ((call.argument<List<Number>>("previousAddresses")) ?: emptyList()).map { it.toLong() }
                     val value = call.argument<Any>("value")
                     if (value == null) {
                         result.error("INVALID_VALUE", "Value is required", null)
@@ -215,7 +196,7 @@ class MainActivity : FlutterActivity() {
 
                 // 内存读写（全部在后台线程执行）
                 "readMemory" -> {
-                    val address = call.argument<Int>("address")
+                    val address = call.argument<Number>("address")?.toLong()
                     if (address == null) {
                         result.error("INVALID_ADDRESS", "Address is required", null)
                         return@setMethodCallHandler
@@ -231,7 +212,7 @@ class MainActivity : FlutterActivity() {
                     }.start()
                 }
                 "writeMemory" -> {
-                    val address = call.argument<Int>("address")
+                    val address = call.argument<Number>("address")?.toLong()
                     val value = call.argument<Any>("value")
                     if (address == null || value == null) {
                         result.error("INVALID_PARAMS", "Address and value are required", null)
@@ -261,7 +242,7 @@ class MainActivity : FlutterActivity() {
 
                 // 内存冻结
                 "freezeMemory" -> {
-                    val address = call.argument<Int>("address")
+                    val address = call.argument<Number>("address")?.toLong()
                     val value = call.argument<Any>("value")
                     if (address == null || value == null) {
                         result.error("INVALID_PARAMS", "Address and value are required", null)
@@ -275,7 +256,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "unfreezeMemory" -> {
-                    val address = call.argument<Int>("address")
+                    val address = call.argument<Number>("address")?.toLong()
                     if (address == null) {
                         result.error("INVALID_ADDRESS", "Address is required", null)
                         return@setMethodCallHandler
@@ -306,7 +287,7 @@ class MainActivity : FlutterActivity() {
                     }.start()
                 }
                 "analyzeMemoryRegion" -> {
-                    val address = call.argument<Int>("address")
+                    val address = call.argument<Number>("address")?.toLong()
                     if (address == null) {
                         result.error("INVALID_ADDRESS", "Address is required", null)
                         return@setMethodCallHandler
@@ -706,18 +687,6 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val page = intent.getStringExtra("page")
-        if (page != null) {
-            pendingPage = page
-            // 延迟通知 Flutter 端，确保 channel 就绪
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                try {
-                    if (::channel.isInitialized) {
-                        channel.invokeMethod("onNavigate", page)
-                    }
-                } catch (_: Exception) {}
-            }, 300)
-        }
     }
 
     // ==================== 权限管理 ====================

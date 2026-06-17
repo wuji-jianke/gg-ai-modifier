@@ -2,17 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
-import 'overlay_app.dart';
 import 'services/storage_service.dart';
 import 'core/models/process_info.dart';
 import 'features/process/process_selector.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 检查是否是悬浮窗模式
-  final args = WidgetsBinding.instance.platformDispatcher.defaultRouteName;
-  final isOverlayMode = args.contains('overlay');
 
   // 初始化存储服务
   final storageService = StorageService();
@@ -21,7 +16,7 @@ void main() async {
   runApp(
     ProviderScope(
       overrides: [storageServiceProvider.overrideWithValue(storageService)],
-      child: isOverlayMode ? const OverlayApp() : const GgModifierApp(),
+      child: const GgModifierApp(),
     ),
   );
 }

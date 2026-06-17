@@ -6,15 +6,16 @@ package com.yl.aigg.ai_gg666
  */
 object MemoryFreezer {
 
-    private val frozenAddresses = mutableMapOf<Int, Map<String, Any>>()
+    private val frozenAddresses = mutableMapOf<Long, Map<String, Any>>()
     private var freezeThread: Thread? = null
     private var isRunning = false
 
     /**
      * 冻结内存地址
      */
-    fun freeze(address: Int, value: Any, type: String): Boolean {
+    fun freeze(address: Long, value: Any, type: String): Boolean {
         frozenAddresses[address] = mapOf(
+            "addressText" to "0x${address.toString(16).uppercase()}",
             "address" to address,
             "value" to value,
             "type" to type
@@ -26,7 +27,7 @@ object MemoryFreezer {
     /**
      * 解除冻结
      */
-    fun unfreeze(address: Int): Boolean {
+    fun unfreeze(address: Long): Boolean {
         frozenAddresses.remove(address)
         if (frozenAddresses.isEmpty()) {
             stopFreezing()
@@ -38,7 +39,15 @@ object MemoryFreezer {
      * 获取所有冻结地址
      */
     fun getFrozenAddresses(): List<Map<String, Any>> {
-        return frozenAddresses.values.toList()
+        return frozenAddresses.values.map { item ->
+            mapOf(
+                "address" to (item["addressText"] ?: item["address"] ?: ""),
+                "addressInt" to (item["address"] ?: 0L),
+                "value" to (item["value"] ?: ""),
+                "type" to (item["type"] ?: "dword"),
+                "isFrozen" to true
+            )
+        }
     }
 
     /**

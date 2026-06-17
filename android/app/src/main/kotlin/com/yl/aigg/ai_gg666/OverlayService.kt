@@ -78,6 +78,7 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        NativeToolApi.initialize(applicationContext)
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         createBall()
@@ -1110,7 +1111,7 @@ class OverlayService : Service() {
                 showWriteDialog(addr, v, mc)
             })
             row.addView(miniBtn("冻") {
-                val ai = addr.removePrefix("0x").removePrefix("0X").toLongOrNull(16)?.toInt() ?: return@miniBtn
+                val ai = addr.removePrefix("0x").removePrefix("0X").toLongOrNull(16) ?: return@miniBtn
                 Thread { if (v != null) MemoryFreezer.freeze(ai, v, searchDataType) }.start()
             })
 
@@ -1292,25 +1293,6 @@ class OverlayService : Service() {
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             content.addView(bar)
         }, 300, 350)
-    }
-
-    // ==================== 跳转到主应用 ====================
-
-    private fun jumpToPage(page: String) {
-        closePanel()
-        try {
-            // 保存到 SharedPreferences 作为备用
-            val prefs = getSharedPreferences("gg_overlay", Context.MODE_PRIVATE)
-            prefs.edit().putString("pending_page", page).apply()
-            
-            val intent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra("page", page)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 
     // ==================== AI 对话面板 ====================
@@ -2103,6 +2085,45 @@ class OverlayService : Service() {
             put(JSONObject().apply {
                 put("type", "function")
                 put("function", JSONObject().apply {
+                    put("name", "list_processes")
+                    put("description", "获取当前设备上可附加的进程列表。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject())
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "attach_process")
+                    put("description", "附加到指定进程。需要传入目标 pid。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject().apply {
+                            put("pid", JSONObject().apply {
+                                put("type", "integer")
+                                put("description", "要附加的进程 ID")
+                            })
+                        })
+                        put("required", JSONArray().apply { put("pid") })
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "get_attached_process")
+                    put("description", "查看当前已附加进程信息。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject())
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
                     put("name", "search_memory")
                     put("description", "在游戏内存中搜索数值。支持精确搜索、范围搜索、AOB搜索。返回匹配的内存地址列表。")
                     put("parameters", JSONObject().apply {
@@ -2124,6 +2145,34 @@ class OverlayService : Service() {
                             })
                         })
                         put("required", JSONArray().apply { put("mode"); put("value") })
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "filter_memory_results")
+                    put("description", "在已有地址列表中继续按目标值过滤结果。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject().apply {
+                            put("addresses", JSONObject().apply {
+                                put("type", "array")
+                                put("items", JSONObject().apply {
+                                    put("type", "string")
+                                })
+                                put("description", "上一步得到的地址列表，如 ['0x1234','0x5678']")
+                            })
+                            put("value", JSONObject().apply {
+                                put("type", "string")
+                                put("description", "要过滤出的目标值")
+                            })
+                            put("type", JSONObject().apply {
+                                put("type", "string")
+                                put("enum", JSONArray().apply { put("dword"); put("float"); put("double"); put("byte"); put("word"); put("qword") })
+                            })
+                        })
+                        put("required", JSONArray().apply { put("addresses"); put("value"); put("type") })
                     })
                 })
             })
@@ -2172,6 +2221,76 @@ class OverlayService : Service() {
                             })
                         })
                         put("required", JSONArray().apply { put("address"); put("value"); put("type") })
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "freeze_memory")
+                    put("description", "冻结指定地址的值，持续写回。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject().apply {
+                            put("address", JSONObject().apply {
+                                put("type", "string")
+                            })
+                            put("value", JSONObject().apply {
+                                put("type", "string")
+                            })
+                            put("type", JSONObject().apply {
+                                put("type", "string")
+                                put("enum", JSONArray().apply { put("dword"); put("float"); put("double"); put("byte"); put("word"); put("qword") })
+                            })
+                        })
+                        put("required", JSONArray().apply { put("address"); put("value"); put("type") })
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "unfreeze_memory")
+                    put("description", "解除指定地址的冻结。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject().apply {
+                            put("address", JSONObject().apply {
+                                put("type", "string")
+                            })
+                        })
+                        put("required", JSONArray().apply { put("address") })
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "list_frozen_memory")
+                    put("description", "查看当前所有冻结地址。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject())
+                    })
+                })
+            })
+            put(JSONObject().apply {
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", "analyze_memory_region")
+                    put("description", "分析指定地址周围的内存区域。")
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("properties", JSONObject().apply {
+                            put("address", JSONObject().apply {
+                                put("type", "string")
+                            })
+                            put("range", JSONObject().apply {
+                                put("type", "integer")
+                                put("description", "前后分析范围，默认 256 字节")
+                            })
+                        })
+                        put("required", JSONArray().apply { put("address") })
                     })
                 })
             })
@@ -2261,76 +2380,17 @@ class OverlayService : Service() {
     private fun executeToolCall(name: String, args: JSONObject): String {
         return try {
             when (name) {
-                "search_memory" -> {
-                    val mode = args.optString("mode", "exact")
-                    val value = args.optString("value", "")
-                    val type = args.optString("type", "dword")
-                    if (MemoryEngine.getAttachedPid() == null) return "❌ 未附加游戏进程，请先附加"
-                    when (mode) {
-                        "exact" -> {
-                            val numVal: Any = if (type == "float" || type == "double") value.toDoubleOrNull() ?: 0.0 else value.toLongOrNull() ?: 0
-                            val res = MemoryEngine.searchExact(numVal, type)
-                            if (res.isEmpty()) return "搜索完成，未找到结果"
-                            val sb = StringBuilder("找到 ${res.size} 个结果：\n")
-                            for ((idx, r) in res.take(50).withIndex()) {
-                                val addr = r["address"] ?: ""
-                                val mc = r["machineCode"] ?: ""
-                                val v = r["value"] ?: ""
-                                sb.append("${idx + 1}. $addr [$mc] = $v\n")
-                            }
-                            if (res.size > 50) sb.append("... 共 ${res.size} 个结果")
-                            sb.append("\n请分析机器码判断哪个地址是目标数据，再使用 write_memory 修改。")
-                            sb.toString()
-                        }
-                        "range" -> {
-                            val parts = value.split(",")
-                            if (parts.size != 2) return "❌ 范围格式错误，应为 '最小值,最大值'"
-                            val lo = parts[0].trim().toLongOrNull() ?: 0
-                            val hi = parts[1].trim().toLongOrNull() ?: 0
-                            val res = MemoryEngine.searchByRange(lo, hi, type)
-                            if (res.isEmpty()) return "搜索完成，未找到结果"
-                            val sb = StringBuilder("找到 ${res.size} 个结果：\n")
-                            for ((idx, r) in res.take(50).withIndex()) {
-                                sb.append("${idx + 1}. 地址: ${r["address"]}, 值: ${r["value"]}\n")
-                            }
-                            sb.toString()
-                        }
-                        "aob" -> {
-                            val res = MemoryEngine.searchAob(value)
-                            if (res.isEmpty()) return "搜索完成，未找到结果"
-                            val sb = StringBuilder("找到 ${res.size} 个结果：\n")
-                            for ((idx, r) in res.take(50).withIndex()) {
-                                sb.append("${idx + 1}. 地址: ${r["address"]}\n")
-                            }
-                            sb.toString()
-                        }
-                        else -> "❌ 未知搜索模式: $mode"
-                    }
-                }
-                "read_memory" -> {
-                    val address = args.optString("address", "")
-                    val type = args.optString("type", "dword")
-                    if (MemoryEngine.getAttachedPid() == null) return "❌ 未附加游戏进程"
-                    val addrLong = address.removePrefix("0x").toLongOrNull(16) ?: return "❌ 无效地址: $address"
-                    val value = MemoryEngine.readMemory(addrLong, type)
-                    "地址 $address 的值: $value (类型: $type)"
-                }
-                "write_memory" -> {
-                    val address = args.optString("address", "")
-                    val value = args.optString("value", "")
-                    val type = args.optString("type", "dword")
-                    if (MemoryEngine.getAttachedPid() == null) return "❌ 未附加游戏进程"
-                    val addrLong = address.removePrefix("0x").toLongOrNull(16) ?: return "❌ 无效地址: $address"
-                    val numVal: Any = if (type == "float" || type == "double") value.toDoubleOrNull() ?: 0.0 else value.toLongOrNull() ?: 0
-                    val success = MemoryEngine.writeMemory(addrLong, numVal, type)
-                    if (success) {
-                        // 写入后验证
-                        val readBack = MemoryEngine.readMemory(addrLong, type)
-                        "✅ 已写入 $value 到地址 $address，回读验证: $readBack"
-                    } else {
-                        "❌ 写入失败，可能是地址不可写或权限不足"
-                    }
-                }
+                "list_processes" -> NativeToolApi.listProcesses()
+                "attach_process" -> NativeToolApi.attachProcess(args)
+                "get_attached_process" -> NativeToolApi.getAttachedProcessInfo()
+                "search_memory" -> NativeToolApi.searchMemory(args)
+                "filter_memory_results" -> NativeToolApi.filterMemoryResults(args)
+                "read_memory" -> NativeToolApi.readMemory(args)
+                "write_memory" -> NativeToolApi.writeMemory(args)
+                "freeze_memory" -> NativeToolApi.freezeMemory(args)
+                "unfreeze_memory" -> NativeToolApi.unfreezeMemory(args)
+                "list_frozen_memory" -> NativeToolApi.listFrozenMemory()
+                "analyze_memory_region" -> NativeToolApi.analyzeMemoryRegion(args)
                 else -> "❌ 未知工具: $name"
             }
         } catch (e: Exception) {
