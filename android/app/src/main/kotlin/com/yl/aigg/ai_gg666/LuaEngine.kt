@@ -357,7 +357,7 @@ object LuaEngine {
             is LuaValue -> value
             is String -> LuaValue.valueOf(value)
             is Int -> LuaValue.valueOf(value)
-            is Long -> LuaValue.valueOf(value)
+            is Long -> LuaValue.valueOf(value.toDouble())
             is Float -> LuaValue.valueOf(value.toDouble())
             is Double -> LuaValue.valueOf(value)
             is Boolean -> LuaValue.valueOf(value)
