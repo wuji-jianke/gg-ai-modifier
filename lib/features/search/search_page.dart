@@ -34,6 +34,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   final TextEditingController _minController = TextEditingController();
   final TextEditingController _maxController = TextEditingController();
   String _selectedFuzzyComparison = 'changed';
+  bool _isSearching = false;
+  bool _fuzzyPrimed = false;
+  String? _statusHint;
 
   @override
   void dispose() {
@@ -43,12 +46,35 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     super.dispose();
   }
 
+  void _selectSearchType(SearchType type) {
+    ref.read(searchTypeProvider.notifier).state = type;
+    if (type == SearchType.fuzzy) {
+      ref.read(dataTypeProvider.notifier).state = DataType.dword;
+      setState(() {
+        _fuzzyPrimed = false;
+        _statusHint = '模糊搜索当前仅支持 DWord，请先执行一次全扫描。';
+      });
+    }
+  }
+
+  void _selectDataType(DataType type) {
+    final currentType = ref.read(dataTypeProvider);
+    if (currentType == type) return;
+    ref.read(dataTypeProvider.notifier).state = type;
+    setState(() {
+      _fuzzyPrimed = false;
+      if (ref.read(searchTypeProvider) == SearchType.fuzzy) {
+        _statusHint = '数据类型已切换，需重新执行模糊全扫描。';
+      }
+    });
+  }
+
   Future<void> _performSearch() async {
     final attachedProcess = ref.read(attachedProcessProvider);
     if (attachedProcess == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先附加游戏进程')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先附加游戏进程')));
       return;
     }
 
@@ -57,6 +83,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
     try {
       const channel = MethodChannel('com.yl.aigg/bridge');
+      setState(() {
+        _isSearching = true;
+        _statusHint = null;
+      });
       ref.read(searchResultsProvider.notifier).state = [];
 
       List<dynamic>? rawResults;
@@ -66,41 +96,54 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           final min = int.tryParse(_minController.text);
           final max = int.tryParse(_maxController.text);
           if (min == null || max == null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('请输入有效的范围值')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入有效的范围值')));
             return;
           }
-          rawResults = await channel.invokeMethod('searchByRange', {
-            'minValue': min,
-            'maxValue': max,
-            'type': dataType.name,
-          }) as List<dynamic>?;
+          rawResults =
+              await channel.invokeMethod('searchByRange', {
+                    'minValue': min,
+                    'maxValue': max,
+                    'type': dataType.name,
+                  })
+                  as List<dynamic>?;
+          break;
 
         case SearchType.fuzzy:
-          rawResults = await channel.invokeMethod('searchFuzzy', {
-            'comparison': _selectedFuzzyComparison,
-            'type': dataType.name,
-          }) as List<dynamic>?;
+          if (!_fuzzyPrimed) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请先执行一次模糊全扫描')));
+            return;
+          }
+          rawResults =
+              await channel.invokeMethod('searchFuzzy', {
+                    'comparison': _selectedFuzzyComparison,
+                    'type': dataType.name,
+                  })
+                  as List<dynamic>?;
+          break;
 
         case SearchType.aob:
           final pattern = _valueController.text.trim();
           if (pattern.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('请输入特征码')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入特征码')));
             return;
           }
-          rawResults = await channel.invokeMethod('searchAob', {
-            'pattern': pattern,
-          }) as List<dynamic>?;
+          rawResults =
+              await channel.invokeMethod('searchAob', {'pattern': pattern})
+                  as List<dynamic>?;
+          break;
 
         case SearchType.exact:
           final value = _valueController.text.trim();
           if (value.isEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('请输入搜索值')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入搜索值')));
             return;
           }
 
@@ -116,16 +159,19 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           }
 
           if (searchValue == null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('请输入有效的数值')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('请输入有效的数值')));
             return;
           }
 
-          rawResults = await channel.invokeMethod('searchExact', {
-            'value': searchValue,
-            'type': dataType.name,
-          }) as List<dynamic>?;
+          rawResults =
+              await channel.invokeMethod('searchExact', {
+                    'value': searchValue,
+                    'type': dataType.name,
+                  })
+                  as List<dynamic>?;
+          break;
       }
 
       if (rawResults != null) {
@@ -138,6 +184,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         if (results.isNotEmpty) {
           ref.read(controlsCollapsedProvider.notifier).state = true;
         }
+        setState(() {
+          if (searchType == SearchType.fuzzy) {
+            _fuzzyPrimed = true;
+          }
+          _statusHint = '找到 ${results.length} 个结果';
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('找到 ${results.length} 个结果'),
@@ -146,9 +198,69 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('搜索失败: $e')),
-      );
+      setState(() {
+        _statusHint = '搜索失败: $e';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('搜索失败: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSearching = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _primeFuzzySearch() async {
+    final attachedProcess = ref.read(attachedProcessProvider);
+    if (attachedProcess == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先附加游戏进程')));
+      return;
+    }
+
+    final dataType = ref.read(dataTypeProvider);
+    try {
+      const channel = MethodChannel('com.yl.aigg/bridge');
+      setState(() {
+        _isSearching = true;
+        _statusHint = '正在执行模糊全扫描...';
+      });
+      final rawResults =
+          await channel.invokeMethod('primeFuzzySearch', {
+                'type': dataType.name,
+              })
+              as List<dynamic>?;
+
+      final results = (rawResults ?? []).map((item) {
+        return MemoryResult.fromJson(Map<String, dynamic>.from(item as Map));
+      }).toList();
+
+      ref.read(searchResultsProvider.notifier).state = results;
+      ref.read(controlsCollapsedProvider.notifier).state = results.isNotEmpty;
+      setState(() {
+        _fuzzyPrimed = true;
+        _statusHint = '模糊全扫描完成，当前候选 ${results.length} 条';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('模糊全扫描完成，候选 ${results.length} 条')));
+    } catch (e) {
+      setState(() {
+        _statusHint = '模糊全扫描失败: $e';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('模糊全扫描失败: $e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSearching = false;
+        });
+      }
     }
   }
 
@@ -166,9 +278,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('写入失败: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('写入失败: $e')));
     }
   }
 
@@ -193,9 +305,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('冻结失败: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('冻结失败: $e')));
     }
   }
 
@@ -212,13 +324,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         }
         return r;
       }).toList();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已解冻 ${result.address}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已解冻 ${result.address}')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('解冻失败: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('解冻失败: $e')));
     }
   }
 
@@ -229,6 +341,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     final results = ref.watch(searchResultsProvider);
     final attachedProcess = ref.watch(attachedProcessProvider);
     final collapsed = ref.watch(controlsCollapsedProvider);
+    final availableTypes = searchType == SearchType.fuzzy
+        ? const [DataType.dword]
+        : DataType.values.where((t) => t != DataType.string).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -247,11 +362,17 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       body: Column(
         children: [
           // 进程状态 + 搜索类型 (紧凑单行)
-          _buildTopBar(attachedProcess, searchType, dataType, collapsed),
+          _buildTopBar(
+            attachedProcess,
+            searchType,
+            dataType,
+            availableTypes,
+            collapsed,
+          ),
           // 搜索输入区域 (可折叠)
-          if (!collapsed) _buildSearchInput(searchType, dataType),
+          if (!collapsed) _buildSearchInput(searchType),
           // 结果统计 + 折叠时的搜索按钮
-          if (results.isNotEmpty) _buildResultBar(results, collapsed, searchType, dataType),
+          if (results.isNotEmpty) _buildResultBar(results, collapsed),
           // 搜索结果列表
           Expanded(
             child: results.isEmpty
@@ -268,6 +389,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     dynamic attachedProcess,
     SearchType searchType,
     DataType dataType,
+    List<DataType> availableTypes,
     bool collapsed,
   ) {
     return Container(
@@ -298,14 +420,20 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                         ? '${attachedProcess.packageName} (PID:${attachedProcess.pid})'
                         : '未附加进程 - 点击选择',
                     style: TextStyle(
-                      color: attachedProcess != null ? Colors.green : Color(0xFFA1887F),
+                      color: attachedProcess != null
+                          ? Colors.green
+                          : Color(0xFFA1887F),
                       fontSize: 12,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 if (attachedProcess != null)
-                  const Icon(Icons.arrow_forward_ios, size: 12, color: Color(0xFFA1887F)),
+                  const Icon(
+                    Icons.arrow_forward_ios,
+                    size: 12,
+                    color: Color(0xFFA1887F),
+                  ),
               ],
             ),
           ),
@@ -325,11 +453,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 return Padding(
                   padding: const EdgeInsets.only(right: 4),
                   child: ChoiceChip(
-                    label: Text(labels[type]!, style: const TextStyle(fontSize: 11)),
+                    label: Text(
+                      labels[type]!,
+                      style: const TextStyle(fontSize: 11),
+                    ),
                     selected: isSelected,
-                    onSelected: (_) {
-                      ref.read(searchTypeProvider.notifier).state = type;
-                    },
+                    onSelected: (_) => _selectSearchType(type),
                     selectedColor: const Color(0xFF8D6E63),
                     visualDensity: VisualDensity.compact,
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -338,6 +467,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 );
               }),
               const Spacer(),
+              if (_isSearching)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
               // 数据类型下拉
               Container(
                 height: 32,
@@ -355,16 +493,17 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                       color: Color(0xFF8D6E63),
                       fontSize: 12,
                     ),
-                    items: DataType.values
-                        .where((t) => t != DataType.string)
-                        .map((type) => DropdownMenuItem(
-                              value: type,
-                              child: Text(type.displayName),
-                            ))
+                    items: availableTypes
+                        .map(
+                          (type) => DropdownMenuItem(
+                            value: type,
+                            child: Text(type.displayName),
+                          ),
+                        )
                         .toList(),
                     onChanged: (type) {
                       if (type != null) {
-                        ref.read(dataTypeProvider.notifier).state = type;
+                        _selectDataType(type);
                       }
                     },
                   ),
@@ -378,58 +517,103 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 
   /// 搜索输入区域
-  Widget _buildSearchInput(SearchType searchType, DataType dataType) {
+  Widget _buildSearchInput(SearchType searchType) {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
       color: const Color(0xFFFFF9F0),
-      child: _buildInputByType(searchType),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildInputByType(searchType),
+          if (_statusHint != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _statusHint!,
+              style: const TextStyle(fontSize: 11, color: Color(0xFFA1887F)),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
   Widget _buildInputByType(SearchType searchType) {
     switch (searchType) {
       case SearchType.range:
-        return Row(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _minController,
-                decoration: const InputDecoration(
-                  hintText: '最小值',
-                  prefixIcon: Icon(Icons.arrow_downward, size: 16),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            const Text(
+              '范围搜索适合已知上下界的数值。',
+              style: TextStyle(fontSize: 11, color: Color(0xFFA1887F)),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _minController,
+                    decoration: const InputDecoration(
+                      hintText: '最小值',
+                      prefixIcon: Icon(Icons.arrow_downward, size: 16),
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      signed: true,
+                    ),
+                    style: const TextStyle(fontSize: 14),
+                  ),
                 ),
-                keyboardType: TextInputType.number,
-                style: const TextStyle(fontSize: 14),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8),
-              child: Text('~', style: TextStyle(color: Color(0xFFA1887F))),
-            ),
-            Expanded(
-              child: TextField(
-                controller: _maxController,
-                decoration: const InputDecoration(
-                  hintText: '最大值',
-                  prefixIcon: Icon(Icons.arrow_upward, size: 16),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8),
+                  child: Text('~', style: TextStyle(color: Color(0xFFA1887F))),
                 ),
-                keyboardType: TextInputType.number,
-                style: const TextStyle(fontSize: 14),
-              ),
+                Expanded(
+                  child: TextField(
+                    controller: _maxController,
+                    decoration: const InputDecoration(
+                      hintText: '最大值',
+                      prefixIcon: Icon(Icons.arrow_upward, size: 16),
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      signed: true,
+                    ),
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _buildSearchResetButtons(),
+              ],
             ),
-            const SizedBox(width: 8),
-            _buildSearchResetButtons(),
           ],
         );
 
       case SearchType.fuzzy:
         return Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isSearching ? null : _primeFuzzySearch,
+                    icon: const Icon(Icons.radar, size: 18),
+                    label: Text(_fuzzyPrimed ? '重新全扫描' : '模糊全扫描'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 6,
               runSpacing: 4,
@@ -438,11 +622,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 _fuzzyChip('unchanged', '未改变'),
                 _fuzzyChip('increased', '增大'),
                 _fuzzyChip('decreased', '减小'),
-                _fuzzyChip('greater', '大于'),
-                _fuzzyChip('less', '小于'),
-                _fuzzyChip('equal', '等于'),
-                _fuzzyChip('not_equal', '不等于'),
               ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '先做一次全扫描建立快照，再用变化条件连续过滤。当前模糊搜索锁定为 DWord。',
+              style: TextStyle(fontSize: 11, color: Color(0xFFA1887F)),
             ),
             const SizedBox(height: 8),
             _buildSearchResetButtons(),
@@ -459,7 +644,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   hintText: '特征码 (如: 48 89 5C 24 ? 48)',
                   prefixIcon: Icon(Icons.fingerprint, size: 16),
                   isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
                 keyboardType: TextInputType.text,
                 style: const TextStyle(fontSize: 14),
@@ -471,23 +659,42 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         );
 
       case SearchType.exact:
-        return Row(
+        final dataType = ref.watch(dataTypeProvider);
+        final decimalInput =
+            dataType == DataType.float || dataType == DataType.double;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _valueController,
-                decoration: const InputDecoration(
-                  hintText: '输入数值',
-                  prefixIcon: Icon(Icons.numbers, size: 16),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
-                keyboardType: TextInputType.number,
-                style: const TextStyle(fontSize: 14),
-              ),
+            const Text(
+              '精确搜索用于已知当前值，可多次重复搜索逐步缩小结果。',
+              style: TextStyle(fontSize: 11, color: Color(0xFFA1887F)),
             ),
-            const SizedBox(width: 8),
-            _buildSearchResetButtons(),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _valueController,
+                    decoration: InputDecoration(
+                      hintText: decimalInput ? '输入整数或小数' : '输入整数数值',
+                      prefixIcon: const Icon(Icons.numbers, size: 16),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                    keyboardType: TextInputType.numberWithOptions(
+                      signed: true,
+                      decimal: decimalInput,
+                    ),
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _buildSearchResetButtons(),
+              ],
+            ),
           ],
         );
     }
@@ -501,12 +708,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         SizedBox(
           height: 40,
           child: ElevatedButton(
-            onPressed: _performSearch,
+            onPressed: _isSearching ? null : _performSearch,
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF8D6E63),
               padding: const EdgeInsets.symmetric(horizontal: 16),
             ),
-            child: const Icon(Icons.search, size: 20),
+            child: _isSearching
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.search, size: 20),
           ),
         ),
         const SizedBox(width: 4),
@@ -518,12 +734,20 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               _valueController.clear();
               _minController.clear();
               _maxController.clear();
+              setState(() {
+                _fuzzyPrimed = false;
+                _statusHint = null;
+              });
               ref.read(controlsCollapsedProvider.notifier).state = false;
             },
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 12),
             ),
-            child: const Icon(Icons.refresh, size: 18, color: Color(0xFFA1887F)),
+            child: const Icon(
+              Icons.refresh,
+              size: 18,
+              color: Color(0xFFA1887F),
+            ),
           ),
         ),
       ],
@@ -549,12 +773,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 
   /// 结果统计栏 (折叠时也显示快速搜索按钮)
-  Widget _buildResultBar(
-    List<MemoryResult> results,
-    bool collapsed,
-    SearchType searchType,
-    DataType dataType,
-  ) {
+  Widget _buildResultBar(List<MemoryResult> results, bool collapsed) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       color: const Color(0xFFFDFBF7),
@@ -564,11 +783,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           const SizedBox(width: 6),
           Text(
             '${results.length} 个结果',
-            style: const TextStyle(color: Color(0xFF3E2723), fontSize: 13, fontWeight: FontWeight.bold),
+            style: const TextStyle(
+              color: Color(0xFF3E2723),
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
           ),
-          if (results.length > 100)
+          if (results.length > 120)
             const Text(
-              ' (显示前100)',
+              ' (显示前120)',
               style: TextStyle(color: Color(0xFFA1887F), fontSize: 11),
             ),
           const Spacer(),
@@ -577,7 +800,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             SizedBox(
               height: 28,
               child: ElevatedButton.icon(
-                onPressed: _performSearch,
+                onPressed: _isSearching ? null : _performSearch,
                 icon: const Icon(Icons.search, size: 16),
                 label: const Text('搜索', style: TextStyle(fontSize: 12)),
                 style: ElevatedButton.styleFrom(
@@ -596,7 +819,11 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                 ),
-                child: const Icon(Icons.tune, size: 16, color: Color(0xFFA1887F)),
+                child: const Icon(
+                  Icons.tune,
+                  size: 16,
+                  color: Color(0xFFA1887F),
+                ),
               ),
             ),
           ],
@@ -628,11 +855,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   /// 结果列表
   Widget _buildResultList(List<MemoryResult> results) {
-    final displayResults = results.length > 100
-        ? results.sublist(0, 100)
+    final displayResults = results.length > 120
+        ? results.sublist(0, 120)
         : results;
 
     return ListView.builder(
+      physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       itemCount: displayResults.length,
       itemBuilder: (context, index) {
@@ -643,84 +871,170 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   /// 紧凑的结果项
   Widget _buildCompactResultItem(MemoryResult result) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      color: const Color(0xFFFDFBF7),
+    final accent = result.isFrozen
+        ? const Color(0xFF6D4C41)
+        : const Color(0xFF8D6E63);
+    final machineCode = result.machineCode?.trim() ?? '';
+    final regionName = result.regionName?.trim() ?? '';
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFDFBF7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE7D9CD)),
+      ),
       child: InkWell(
         onTap: () => _showEditDialog(result),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 状态图标
-              Icon(
-                result.isFrozen ? Icons.lock : Icons.memory,
-                color: result.isFrozen
-                    ? const Color(0xFF6D4C41)
-                    : result.isFavorite
-                        ? Colors.amber
-                        : Color(0xFFA1887F),
-                size: 18,
+              Row(
+                children: [
+                  Icon(
+                    result.isFrozen ? Icons.lock : Icons.memory,
+                    color: accent,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      result.address,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: Color(0xFF8D6E63),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_horiz, size: 18),
+                    onSelected: (action) {
+                      switch (action) {
+                        case 'edit':
+                          _showEditDialog(result);
+                          break;
+                        case 'freeze':
+                          if (result.isFrozen) {
+                            _unfreezeMemory(result);
+                          } else {
+                            _showFreezeDialog(result);
+                          }
+                          break;
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'edit', child: Text('修改值')),
+                      PopupMenuItem(
+                        value: 'freeze',
+                        child: Text(result.isFrozen ? '解冻' : '冻结'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(width: 10),
-              // 地址
-              Expanded(
-                flex: 3,
-                child: Text(
-                  result.address,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    color: Color(0xFF8D6E63),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _resultBadge(result.type.displayName),
+                  if (regionName.isNotEmpty) _resultBadge(regionName),
+                  if (result.isFrozen) _resultBadge('已冻结'),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _resultMetric(
+                      '当前值',
+                      '${result.value}',
+                      emphasize: true,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _resultMetric(
+                      result.isFrozen ? '冻结值' : '状态',
+                      result.isFrozen
+                          ? '${result.frozenValue ?? result.value}'
+                          : '可修改',
+                    ),
+                  ),
+                ],
+              ),
+              if (machineCode.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF9F0),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '机器码预览',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFFA1887F),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _truncateMachineCode(machineCode),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Color(0xFF5D4037),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              // 值
-              Expanded(
-                flex: 2,
-                child: Text(
-                  '${result.value}',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.right,
-                ),
-              ),
-              const SizedBox(width: 8),
-              // 类型标签
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF9F0),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  result.type.displayName,
-                  style: const TextStyle(fontSize: 10, color: Color(0xFFA1887F)),
-                ),
-              ),
-              const SizedBox(width: 4),
-              // 操作按钮
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, size: 18),
-                onSelected: (action) {
-                  switch (action) {
-                    case 'edit':
-                      _showEditDialog(result);
-                      break;
-                    case 'freeze':
-                      if (result.isFrozen) {
-                        _unfreezeMemory(result);
-                      } else {
-                        _showFreezeDialog(result);
-                      }
-                      break;
-                  }
-                },
-                itemBuilder: (context) => [
-                  const PopupMenuItem(value: 'edit', child: Text('修改值')),
-                  PopupMenuItem(
-                    value: 'freeze',
-                    child: Text(result.isFrozen ? '解冻' : '冻结'),
+              ],
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _showEditDialog(result),
+                      icon: const Icon(Icons.edit_outlined, size: 16),
+                      label: const Text('修改'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        if (result.isFrozen) {
+                          _unfreezeMemory(result);
+                        } else {
+                          _showFreezeDialog(result);
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: result.isFrozen
+                            ? const Color(0xFF6D4C41)
+                            : const Color(0xFF8D6E63),
+                      ),
+                      icon: Icon(
+                        result.isFrozen ? Icons.lock_open : Icons.lock,
+                        size: 16,
+                      ),
+                      label: Text(result.isFrozen ? '解冻' : '冻结'),
+                    ),
                   ),
                 ],
               ),
@@ -729,6 +1043,56 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         ),
       ),
     );
+  }
+
+  Widget _resultMetric(String label, String value, {bool emphasize = false}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF9F0),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontSize: 10, color: Color(0xFFA1887F)),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: emphasize ? 15 : 13,
+              fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
+              color: const Color(0xFF3E2723),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _resultBadge(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF4EA),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 10, color: Color(0xFFA1887F)),
+      ),
+    );
+  }
+
+  String _truncateMachineCode(String machineCode) {
+    final bytes = machineCode.split(RegExp(r'\s+'));
+    if (bytes.length <= 12) return machineCode;
+    return '${bytes.take(12).join(' ')} ...';
   }
 
   void _showEditDialog(MemoryResult result) {

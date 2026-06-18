@@ -167,6 +167,17 @@ class MainActivity : FlutterActivity() {
                         }
                     }.start()
                 }
+                "primeFuzzySearch" -> {
+                    val type = call.argument<String>("type") ?: "dword"
+                    Thread {
+                        try {
+                            val results = MemoryEngine.primeFuzzySnapshot(type)
+                            runOnUiThread { result.success(results) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("FUZZY_PRIME_ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
 
                 // 特征码搜索 (AOB Scan)
                 "searchAob" -> {

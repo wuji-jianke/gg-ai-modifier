@@ -266,6 +266,12 @@ object MemoryEngine {
         } catch (e: Exception) { emptyList() }
     }
 
+    fun primeFuzzySnapshot(type: String): List<Map<String, Any>> {
+        val initialResults = searchAllValues(type)
+        saveSnapshot(initialResults, type)
+        return initialResults
+    }
+
     fun searchAob(pattern: String, mask: String? = null): List<Map<String, Any>> {
         val pid = attachedPid ?: return emptyList()
         if (activeRegions.isEmpty()) return emptyList()

@@ -358,8 +358,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         final json = jsonDecode(response.body);
         if (_responseLooksValid(json)) {
           setState(() {
-            _testResult =
-                '✅ 连接成功！模型: $model | 协议: ${_selectedApiFormat.label}';
+            _testResult = '✅ 连接成功！模型: $model | 协议: ${_selectedApiFormat.label}';
           });
         } else {
           setState(() {
@@ -539,6 +538,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return const [];
   }
 
+  Widget _buildSectionPanel({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(14),
+  }) {
+    return RepaintBoundary(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF9F0),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFE9DDD2)),
+        ),
+        child: Padding(padding: padding, child: child),
+      ),
+    );
+  }
+
   Future<void> _showModelPicker() async {
     if (_availableModels.isEmpty) return;
 
@@ -608,7 +623,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ),
       ),
       body: ListView(
+        primary: true,
         padding: const EdgeInsets.all(16),
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
         children: [
           // LLM API 配置
           _buildSectionTitle('🤖 LLM API 配置'),
@@ -771,13 +790,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: _testResult!.startsWith('✅')
-                    ? Colors.green.withOpacity(0.1)
-                    : Colors.red.withOpacity(0.1),
+                    ? Colors.green.withValues(alpha: 0.1)
+                    : Colors.red.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: _testResult!.startsWith('✅')
-                      ? Colors.green.withOpacity(0.3)
-                      : Colors.red.withOpacity(0.3),
+                      ? Colors.green.withValues(alpha: 0.3)
+                      : Colors.red.withValues(alpha: 0.3),
                 ),
               ),
               child: Text(
@@ -821,7 +840,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(height: 12),
           // GitHub 开源地址
-          Card(
+          _buildSectionPanel(
+            padding: EdgeInsets.zero,
             child: ListTile(
               leading: const Icon(Icons.code, color: Color(0xFF8D6E63)),
               title: const Text('GitHub 开源地址'),
@@ -843,9 +863,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.orange.withOpacity(0.1),
+              color: Colors.orange.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.orange.withOpacity(0.3)),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
             ),
             child: const Row(
               children: [
@@ -868,17 +888,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Widget _buildSectionTitle(String title) {
     return Text(
       title,
-      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
     );
   }
 
   Widget _buildPresetSelector() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF9F0),
-        borderRadius: BorderRadius.circular(8),
-      ),
+    return _buildSectionPanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -956,51 +971,46 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Widget _buildRootStatusCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  _rootStatus.contains('✅')
-                      ? Icons.check_circle
-                      : Icons.security,
-                  color: _rootStatus.contains('✅')
-                      ? Colors.green
-                      : const Color(0xFF8D6E63),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Root 状态: $_rootStatus',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '需要 Root 权限才能读写其他进程内存。\n点击下方按钮会触发 Magisk 授权弹窗。',
-              style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _isCheckingRoot ? null : _checkRootAccess,
-                icon: _isCheckingRoot
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh),
-                label: Text(_isCheckingRoot ? '检测中...' : '检测 Root 权限'),
+    return _buildSectionPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                _rootStatus.contains('✅') ? Icons.check_circle : Icons.security,
+                color: _rootStatus.contains('✅')
+                    ? Colors.green
+                    : const Color(0xFF8D6E63),
               ),
+              const SizedBox(width: 8),
+              Text(
+                'Root 状态: $_rootStatus',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '当前链路是 Root 跨进程读写：通过 su 拉起 native scanner，直接读写 /proc/<pid>/mem。\n点击下方按钮会触发 Magisk 授权弹窗。',
+            style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _isCheckingRoot ? null : _checkRootAccess,
+              icon: _isCheckingRoot
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              label: Text(_isCheckingRoot ? '检测中...' : '检测 Root 权限'),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1053,105 +1063,99 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Widget _buildOverlayCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.bubble_chart, color: Color(0xFF8D6E63)),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    '游戏内悬浮窗',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
+    return _buildSectionPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.bubble_chart, color: Color(0xFF8D6E63)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '游戏内悬浮窗',
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                Switch(
-                  value: _overlayEnabled,
-                  onChanged: _toggleOverlay,
-                  activeColor: const Color(0xFF8D6E63),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '开启后会在屏幕上显示一个悬浮球，点击可快速打开 AI 对话、内存搜索等功能，无需切换窗口。',
-              style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.autorenew, size: 16, color: Color(0xFFA1887F)),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text('启动时自动开启悬浮窗', style: TextStyle(fontSize: 13)),
-                ),
-                Switch(
-                  value: _autoStartOverlay,
-                  onChanged: _toggleAutoStart,
-                  activeColor: const Color(0xFF8D6E63),
-                ),
-              ],
-            ),
-          ],
-        ),
+              ),
+              Switch(
+                value: _overlayEnabled,
+                onChanged: _toggleOverlay,
+                activeThumbColor: const Color(0xFF8D6E63),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '开启后会在屏幕上显示一个悬浮球，点击可快速打开 AI 对话、内存搜索等功能，无需切换窗口。',
+            style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Icon(Icons.autorenew, size: 16, color: Color(0xFFA1887F)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('启动时自动开启悬浮窗', style: TextStyle(fontSize: 13)),
+              ),
+              Switch(
+                value: _autoStartOverlay,
+                onChanged: _toggleAutoStart,
+                activeThumbColor: const Color(0xFF8D6E63),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildReadDepthCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.data_usage, color: Color(0xFF8D6E63)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'AI 读取深度',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
+    return _buildSectionPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.data_usage, color: Color(0xFF8D6E63)),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'AI 读取深度',
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '限制发送给 AI 的搜索结果数量，节省 Token 并防止上下文溢出。'
-              '当结果过多时，仅发送前 N 条样本和统计数据。',
-              style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: AiReadDepth.values.map((depth) {
-                final isSelected = _selectedReadDepth == depth;
-                return ChoiceChip(
-                  label: Text(depth.label),
-                  selected: isSelected,
-                  onSelected: (_) {
-                    setState(() {
-                      _selectedReadDepth = depth;
-                    });
-                    final storage = ref.read(storageServiceProvider);
-                    storage.saveSetting('ai_read_depth', depth.index);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('✅ AI 读取深度已设为: ${depth.label}')),
-                    );
-                  },
-                  selectedColor: const Color(0xFF8D6E63),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '限制发送给 AI 的搜索结果数量，节省 Token 并防止上下文溢出。'
+            '当结果过多时，仅发送前 N 条样本和统计数据。',
+            style: TextStyle(fontSize: 12, color: Color(0xFFA1887F)),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: AiReadDepth.values.map((depth) {
+              final isSelected = _selectedReadDepth == depth;
+              return ChoiceChip(
+                label: Text(depth.label),
+                selected: isSelected,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedReadDepth = depth;
+                  });
+                  final storage = ref.read(storageServiceProvider);
+                  storage.saveSetting('ai_read_depth', depth.index);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('✅ AI 读取深度已设为: ${depth.label}')),
+                  );
+                },
+                selectedColor: const Color(0xFF8D6E63),
+              );
+            }).toList(),
+          ),
+        ],
       ),
     );
   }
@@ -1162,7 +1166,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     required String subtitle,
     Widget? trailing,
   }) {
-    return Card(
+    return _buildSectionPanel(
+      padding: EdgeInsets.zero,
       child: ListTile(
         leading: Icon(icon, color: const Color(0xFF8D6E63)),
         title: Text(title),

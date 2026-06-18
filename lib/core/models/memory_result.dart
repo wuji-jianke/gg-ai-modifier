@@ -50,6 +50,9 @@ class MemoryResult {
   /// 所属内存区域描述
   final String? regionName;
 
+  /// 地址处机器码/原始字节预览
+  final String? machineCode;
+
   const MemoryResult({
     required this.address,
     required this.addressInt,
@@ -59,6 +62,7 @@ class MemoryResult {
     this.isFrozen = false,
     this.frozenValue,
     this.regionName,
+    this.machineCode,
   });
 
   MemoryResult copyWith({
@@ -70,6 +74,7 @@ class MemoryResult {
     bool? isFrozen,
     dynamic frozenValue,
     String? regionName,
+    String? machineCode,
   }) {
     return MemoryResult(
       address: address ?? this.address,
@@ -80,6 +85,7 @@ class MemoryResult {
       isFrozen: isFrozen ?? this.isFrozen,
       frozenValue: frozenValue ?? this.frozenValue,
       regionName: regionName ?? this.regionName,
+      machineCode: machineCode ?? this.machineCode,
     );
   }
 
@@ -94,6 +100,7 @@ class MemoryResult {
       'isFrozen': isFrozen,
       'frozenValue': frozenValue,
       'regionName': regionName,
+      'machineCode': machineCode,
     };
   }
 
@@ -108,6 +115,7 @@ class MemoryResult {
       isFrozen: json['isFrozen'] as bool? ?? false,
       frozenValue: json['frozenValue'],
       regionName: json['regionName'] as String?,
+      machineCode: json['machineCode'] as String?,
     );
   }
 
